@@ -26,3 +26,10 @@
 
    ```bash
    python3 --version
+
+### Step 3: Run the Script
+
+Run the script using the following command:
+
+```bash
+python3 el_doctor.py
