@@ -77,3 +77,7 @@ If any of the monitored metrics exceed the configured critical thresholds, an em
 ## Conclusion
 
 **El Doctor** is a powerful and customizable monitoring tool that allows users to keep track of their system's performance in real-time. By leveraging Python's `curses` library and the `psutil` package, it provides a user-friendly interface and essential monitoring capabilities.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
