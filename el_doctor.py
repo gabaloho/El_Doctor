@@ -8,10 +8,8 @@ from datetime import datetime
 
 # Configuration
 CSV_FILE = 'system_metrics.csv'
-EMAIL_ADDRESS = 'youremail@gmail.com'  # Replace with your Gmail 
-address
-EMAIL_PASSWORD = 'eX AM PLE PASS Wd'  # Use your Gmail app 
-passwordpython
+EMAIL_ADDRESS = 'youremail@gmail.com'  # Replace with your Gmail address
+EMAIL_PASSWORD = 'eX AM PLE PASS Wd'  # Use your Gmail app password
 TO_EMAIL = "yourExample@duck.com"
 CRITICAL_CPU_THRESHOLD = 90  # in percentage
 CRITICAL_MEMORY_THRESHOLD = 90  # in percentage
@@ -58,16 +56,11 @@ metrics['outgoing_traffic']])
 def check_critical_conditions(metrics):
     """Check for critical conditions and send notifications."""
     if metrics['cpu_usage'] > CRITICAL_CPU_THRESHOLD:
-        send_email("Critical CPU Usage Alert", f"CPU usage is at 
-{metrics['cpu_usage']}%")
-    if (metrics['used_memory'] / metrics['total_memory'] * 100) > 
-CRITICAL_MEMORY_THRESHOLD:
-        send_email("Critical Memory Usage Alert", f"Memory usage is at 
-{metrics['used_memory']} MB / {metrics['total_memory']} MB")
-    if (metrics['used_disk'] / metrics['total_disk'] * 100) > 
-CRITICAL_DISK_THRESHOLD:
-        send_email("Critical Disk Usage Alert", f"Disk usage is at 
-{metrics['used_disk']} GB / {metrics['total_disk']} GB")
+        send_email("Critical CPU Usage Alert", f"CPU usage is at {metrics['cpu_usage']}%")
+    if (metrics['used_memory'] / metrics['total_memory'] * 100) > CRITICAL_MEMORY_THRESHOLD:
+        send_email("Critical Memory Usage Alert", f"Memory usage is at {metrics['used_memory']} MB / {metrics['total_memory']} MB")
+    if (metrics['used_disk'] / metrics['total_disk'] * 100) > CRITICAL_DISK_THRESHOLD:
+        send_email("Critical Disk Usage Alert", f"Disk usage is at {metrics['used_disk']} GB / {metrics['total_disk']} GB")
 
 def display_metrics(stdscr):
     """Display metrics in a curses window."""
@@ -83,14 +76,10 @@ def display_metrics(stdscr):
 
         stdscr.addstr(0, 0, f"Timestamp: {metrics['timestamp']}")
         stdscr.addstr(1, 0, f"CPU Usage: {metrics['cpu_usage']}%")
-        stdscr.addstr(2, 0, f"Memory Usage: {metrics['used_memory']} MB / 
-{metrics['total_memory']} MB")
-        stdscr.addstr(3, 0, f"Disk Usage: {metrics['used_disk']} GB / 
-{metrics['total_disk']} GB")
-        stdscr.addstr(4, 0, f"Incoming Traffic: 
-{metrics['incoming_traffic']} bytes")
-        stdscr.addstr(5, 0, f"Outgoing Traffic: 
-{metrics['outgoing_traffic']} bytes")
+        stdscr.addstr(2, 0, f"Memory Usage: {metrics['used_memory']} MB / {metrics['total_memory']} MB")
+        stdscr.addstr(3, 0, f"Disk Usage: {metrics['used_disk']} GB / {metrics['total_disk']} GB")
+        stdscr.addstr(4, 0, f"Incoming Traffic: {metrics['incoming_traffic']} bytes")
+        stdscr.addstr(5, 0, f"Outgoing Traffic: {metrics['outgoing_traffic']} bytes")
         stdscr.refresh()
 
         if stdscr.getch() == ord('q'):  # Press 'q' to exit
@@ -98,4 +87,3 @@ def display_metrics(stdscr):
 
 if __name__ == "__main__":
     curses.wrapper(display_metrics)
-
