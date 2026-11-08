@@ -138,7 +138,7 @@ interpreter, set `ELDOCTOR_GUI_PYTHON=/path/to/python`; to turn this off, use `-
 * **Keyboard**: Ctrl+1…9 switch tabs, F5 refresh, Delete kills the selected process, Alt+A / Alt+D
   approve or deny, Ctrl+T light/dark, Ctrl+Q quit.
 
-Screenshots from the sandbox run are in `docs/screenshots/gui_*.png`.
+Screenshots are omitted from the repository to avoid publishing demo account details.
 
 ## 2. Architecture
 
@@ -273,8 +273,8 @@ hard-coded Gmail password is gone.
 notifications:
   min_severity: medium
   channels:
-    - {type: email, smtp_host: smtp.gmail.com, smtp_port: 587, username: me@gmail.com,
-       password_env: ELDOCTOR_SMTP_PASSWORD, to: [soc@example.com], min_severity: high}
+    - {type: email, smtp_host: smtp.gmail.com, smtp_port: 587, username: me@example.invalid,
+       password_env: ELDOCTOR_SMTP_PASSWORD, to: [soc@example.invalid], min_severity: high}
     - {type: slack,   url_env: ELDOCTOR_SLACK_WEBHOOK}
     - {type: teams,   url_env: ELDOCTOR_TEAMS_WEBHOOK}        # Workflows webhook, Adaptive Card
     - {type: discord, url_env: ELDOCTOR_DISCORD_WEBHOOK}
@@ -423,9 +423,7 @@ The systemd unit serves the API on `/run/eldoctor/api.sock`, so analysts use `el
 * `python3 scripts/verify_requirements.py` runs checks R7.1–R7.7 and R8.1–R8.3.
 * Tests: `tests/test_api.py`, `tests/test_integrity.py` and `tests/test_forward_secure.py`.
 * Reviewer checklist: [`docs/REVIEW_GUIDE.md`](docs/REVIEW_GUIDE.md).
-* Screenshot `docs/screenshots/gui_15_audit_trail_agent_api.png`: the GUI as an API client. A
-  viewer's approval was refused by the agent, a forged approval in the DB was rejected (red
-  ED-INT-001 banner), and the audit trail shows the OS user and front end of every record.
+* GUI walkthroughs can be run locally with the commands in [`docs/REVIEW_GUIDE.md`](docs/REVIEW_GUIDE.md).
 
 **What no on-host design can prevent, and what happens instead:**
 * An attacker who controls the machine **while the agent runs** (root, the service account) can

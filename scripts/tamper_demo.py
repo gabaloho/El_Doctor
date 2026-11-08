@@ -11,11 +11,11 @@ Requires an agent in interactive mode on the same ELDOCTOR_HOME:
     LAB_SCOPE_PID=$$ scripts/lab.sh interactive none && python3 scripts/tamper_demo.py
 
 Steps
-  1. a viewer ("mallory") cannot approve through the API            -> refused by the agent (exit 3)
-  2. mallory edits the database directly to forge the approval      -> the agent refuses to act, marks it
+  1. a viewer ("attacker_user") cannot approve through the API            -> refused by the agent (exit 3)
+  2. attacker_user edits the database directly to forge the approval      -> the agent refuses to act, marks it
                                                                        'rejected', raises ED-INT-001 (critical)
-  3. mallory promotes herself to admin in the users table           -> her account is refused (seal broken)
-  4. mallory rewrites an audit record to blame someone else         -> `eldoctor audit verify` -> TAMPERED
+  3. attacker_user promotes herself to admin in the users table           -> her account is refused (seal broken)
+  4. attacker_user rewrites an audit record to blame someone else         -> `eldoctor audit verify` -> TAMPERED
   5. the SIEM copy (mock receiver) holds the original records and the integrity incidents
   --- the attacker now also reads every key file (what root / the service account could take) ---
   6. with the HMAC master key she recomputes the seal of "role=admin"   -> still refused: the signed
@@ -25,7 +25,7 @@ Steps
   8. she downplays an alert and rewrites a kill as "failed"            -> `eldoctor alerts` marks the
                                                                        row tampered, verify reports both
 
-(In a real deployment mallory could not even open the database: `eldoctor service` locks the data folder
+(In a real deployment attacker_user could not even open the database: `eldoctor service` locks the data folder
 to the service account.  This demo runs as the folder's owner precisely to show what happens *if* the file
 is edited anyway.)
 """
@@ -67,11 +67,11 @@ def check(ok, what):
 
 def main() -> int:
     ok = True
-    mallory = Path("/tmp/ed_mallory_client")                     # mallory's own client folder (session token)
-    print("== 0. mallory self-registers (viewer) and logs in")
-    ed("register", "--non-interactive", "--username", "mallory", "--email", "m@x.io", "--password-env", "P",
-       client_dir=mallory)
-    r = ed("login", "--username", "mallory", "--password-env", "P", client_dir=mallory)
+    attacker_user = Path("/tmp/ed_mallory_client")                     # attacker_user's own client folder (session token)
+    print("== 0. attacker_user self-registers (viewer) and logs in")
+    ed("register", "--non-interactive", "--username", "attacker_user", "--email", "m@example.invalid", "--password-env", "P",
+       client_dir=attacker_user)
+    r = ed("login", "--username", "attacker_user", "--password-env", "P", client_dir=attacker_user)
     print("   " + (r.stdout or r.stderr).strip())
 
     print("== 1. a process triggers an approval request")
@@ -88,11 +88,11 @@ def main() -> int:
         hog.kill()
         return 1
     print(f"   approval {aid} pending for python3[{hog.pid}]")
-    r = ed("approvals", "approve", aid, client_dir=mallory)
+    r = ed("approvals", "approve", aid, client_dir=attacker_user)
     ok &= check(r.returncode == 3 and "checked by the agent" in r.stderr,
-                f"mallory> eldoctor approvals approve {aid}  ->  {r.stderr.strip()}")
+                f"attacker_user> eldoctor approvals approve {aid}  ->  {r.stderr.strip()}")
 
-    print("== 2. mallory forges the approval directly in eldoctor.db")
+    print("== 2. attacker_user forges the approval directly in eldoctor.db")
     db().execute("UPDATE approvals SET status='approved', decided_by='admin1', decided_ts=? WHERE id=?",
                  (time.time(), aid))
     time.sleep(4)
@@ -103,18 +103,18 @@ def main() -> int:
     ok &= check(inc is not None, f"incident raised: {inc['title'] if inc else '-'}")
     hog.kill()
 
-    print("== 3. mallory makes herself admin in the users table")
-    db().execute("UPDATE users SET role='admin' WHERE username='mallory'")
-    r = ed("login", "--username", "mallory", "--password-env", "P", client_dir=mallory)
+    print("== 3. attacker_user makes herself admin in the users table")
+    db().execute("UPDATE users SET role='admin' WHERE username='attacker_user'")
+    r = ed("login", "--username", "attacker_user", "--password-env", "P", client_dir=attacker_user)
     ok &= check(r.returncode == 2 and "integrity" in r.stderr, f"login refused: {r.stderr.strip()}")
-    r = ed("users", "list", client_dir=mallory)
+    r = ed("users", "list", client_dir=attacker_user)
     ok &= check(r.returncode == 2, "her existing session is refused as well")
 
-    print("== 4. mallory rewrites the audit trail to blame someone else")
-    rec = db().execute("SELECT id, actor FROM audit WHERE event='api_denied' AND actor='mallory' "
+    print("== 4. attacker_user rewrites the audit trail to blame someone else")
+    rec = db().execute("SELECT id, actor FROM audit WHERE event='api_denied' AND actor='attacker_user' "
                        "ORDER BY id LIMIT 1").fetchone()
     if rec:
-        db().execute("UPDATE audit SET actor='alice' WHERE id=?", (rec["id"],))
+        db().execute("UPDATE audit SET actor='admin_user' WHERE id=?", (rec["id"],))
     r = ed("audit", "verify")
     first = r.stdout.strip().splitlines()[:3]
     ok &= check(r.returncode == 4 and "TAMPERED" in r.stdout, "eldoctor audit verify -> " + " | ".join(first))
@@ -125,30 +125,30 @@ def main() -> int:
         lines = [json.loads(x) for x in SIEM.read_text().splitlines() if '"syslog"' in x]
         audit = [x["message"] for x in lines if "eldoctor-audit" in x.get("message", "")]
         viol = [m for m in audit if "audit:integrity_violation" in m]
-        denied = [m for m in audit if "audit:api_denied" in m and "suser=mallory" in m]
+        denied = [m for m in audit if "audit:api_denied" in m and "suser=attacker_user" in m]
         ok &= check(audit, f"{len(audit)} audit records forwarded to the SIEM (CEF over syslog)")
         ok &= check(viol, f"{len(viol)} integrity incidents in the SIEM")
-        ok &= check(denied, "the original record 'mallory was denied' is in the SIEM, whatever the local DB says")
+        ok &= check(denied, "the original record 'attacker_user was denied' is in the SIEM, whatever the local DB says")
     else:
         print("   (no mock SIEM output at /tmp/ed_received.jsonl - run via scripts/lab.sh)")
-    print("== 6. mallory (now holding the master key) recomputes the seal for role=admin")
+    print("== 6. attacker_user (now holding the master key) recomputes the seal for role=admin")
     sys.path.insert(0, str(ROOT))
     from eldoctor.integrity import Keyring, SigningChain, audit_hash
     from eldoctor.storage import Store
     keys = Keyring(DB.parent)
-    row = dict(db().execute("SELECT * FROM users WHERE username='mallory'").fetchone())
+    row = dict(db().execute("SELECT * FROM users WHERE username='attacker_user'").fetchone())
     row["role"] = "admin"
-    db().execute("UPDATE users SET role='admin', seal=? WHERE username='mallory'",
+    db().execute("UPDATE users SET role='admin', seal=? WHERE username='attacker_user'",
                  (keys.seal("user", Store._user_fields(row)),))
-    r = ed("login", "--username", "mallory", "--password-env", "P", client_dir=mallory)
+    r = ed("login", "--username", "attacker_user", "--password-env", "P", client_dir=attacker_user)
     ok &= check(r.returncode == 2, "HMAC seal recomputed with the stolen key - login still refused: "
                 + r.stderr.strip()[:110])
 
-    print("== 7. mallory re-signs a past audit record with the stolen current signing key")
+    print("== 7. attacker_user re-signs a past audit record with the stolen current signing key")
     chain = SigningChain(keys.dir)
     stolen = [f.stem for f in chain.dir.glob("*.key")]
     c = db()
-    victim_rec = dict(c.execute("SELECT *, id AS seq FROM audit WHERE event='session_issued' AND actor='mallory' "
+    victim_rec = dict(c.execute("SELECT *, id AS seq FROM audit WHERE event='session_issued' AND actor='attacker_user' "
                                 "ORDER BY id LIMIT 1").fetchone() or {})
     if victim_rec and stolen:
         sk = chain.load(stolen[0])
@@ -162,7 +162,7 @@ def main() -> int:
     ok &= check(r.returncode == 4 and "signing key does not continue" in r.stdout,
                 "eldoctor audit verify -> TAMPERED: signing key does not continue the chain")
 
-    print("== 8. mallory downplays an alert and rewrites a kill as 'failed'")
+    print("== 8. attacker_user downplays an alert and rewrites a kill as 'failed'")
     a = db().execute("SELECT id FROM alerts ORDER BY ts DESC LIMIT 1").fetchone()
     db().execute("UPDATE alerts SET severity='low' WHERE id=?", (a["id"],))
     db().execute("UPDATE actions SET status='failed' WHERE id=(SELECT MAX(id) FROM actions WHERE action='kill' "

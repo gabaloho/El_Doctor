@@ -71,7 +71,7 @@ def smtp_sink():
 def alert():
     return Alert(rule_id="ED-IOC-002", title="Connection to malicious IP", severity="critical", source="ioc",
                  mitre=["T1071"], remote_ip="198.51.100.23",
-                 process={"pid": 42, "name": "beacon", "exe": "/tmp/beacon", "sha256": "ab" * 32, "username": "bob",
+                 process={"pid": 42, "name": "beacon", "exe": "/tmp/beacon", "sha256": "ab" * 32, "username": "user_two",
                           "cmdline": "beacon -c2"})
 
 

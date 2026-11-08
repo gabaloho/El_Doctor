@@ -231,9 +231,9 @@ def test_interactive_mode_approval_flow(cfg, store, victim):
     # a second alert for the same process must not create a second approval
     assert eng.handle(hog_alert(victim))[0]["approval_id"] == aid
     assert len(store.list_approvals("pending")) == 1
-    assert store.decide_approval(aid, True, "alice")
+    assert store.decide_approval(aid, True, "admin_user")
     runs = eng.process_approvals()
-    assert runs and runs[0]["approved_by"] == "alice"
+    assert runs and runs[0]["approved_by"] == "admin_user"
     victim.wait(timeout=5)
 
 
@@ -248,7 +248,7 @@ def test_interactive_deny_resumes_suspended_process(cfg, store, tmp_path):
         run = eng.handle(a)[0]
         assert run["playbook"] == "pb-cryptominer" and run["status"] == "awaiting_approval"
         assert psutil.Process(p.pid).status() == psutil.STATUS_STOPPED
-        store.decide_approval(run["approval_id"], False, "alice")
+        store.decide_approval(run["approval_id"], False, "admin_user")
         eng.process_approvals()
         assert psutil.Process(p.pid).status() != psutil.STATUS_STOPPED and miner.exists()
     finally:
@@ -301,8 +301,8 @@ steps:
 
 # ------------------------------------------------------------------ regression: never quarantine interpreters
 @pytest.mark.parametrize("path", ["/opt/uv-python/cpython-3.14.7/bin/python3.14", "/home/u/.venv/bin/python",
-                                  "C:\\Users\\bob\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
-                                  "C:\\Users\\bob\\AppData\\Local\\Programs\\Python\\Python314\\pythonw.exe",
+                                  "C:\\Users\\user_two\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+                                  "C:\\Users\\user_two\\AppData\\Local\\Programs\\Python\\Python314\\pythonw.exe",
                                   "/usr/local/bin/node", "/opt/homebrew/bin/bash", "C:\\Windows\\System32\\cmd.exe",
                                   "C:\\Program Files\\PowerShell\\7\\pwsh.exe"])
 def test_interpreters_are_never_quarantined(cfg, path):

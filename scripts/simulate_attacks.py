@@ -210,8 +210,8 @@ def sc_ssh_bruteforce():
 
 def sc_auth_log_file():
     for _ in range(3):
-        append_auth_log("pam_unix(sudo:auth): authentication failure; logname=bob uid=1001 euid=0 tty=/dev/pts/1 "
-                        "ruser=bob rhost=  user=bob", prog="sudo")
+        append_auth_log("pam_unix(sudo:auth): authentication failure; logname=user_two uid=1001 euid=0 tty=/dev/pts/1 "
+                        "ruser=user_two rhost=  user=user_two", prog="sudo")
     append_auth_log("new user: name=backd00r, UID=1002, GID=1002, home=/home/backd00r, shell=/bin/bash", prog="useradd")
     return None, "auth.log tail: sudo failures + new account"
 

@@ -30,9 +30,9 @@ rm -rf "$ELDOCTOR_HOME" /tmp/ed_received.jsonl /tmp/eldoctor-sim
 nohup "$PY" "$ROOT/scripts/mock_receivers.py" --out /tmp/ed_received.jsonl --files /tmp/eldoctor-sim/feeds \
       > /tmp/ed_mock.log 2>&1 &
 sleep 1
-$ED register --non-interactive --username alice --email alice@acme.example --full-name "Alice Analyst" \
-    --org "Acme SOC" --use-case soc --deploy-target linux --password-env LAB_PW | grep Registered
-$ED login --username alice --password-env LAB_PW
+$ED register --non-interactive --username admin_user --email admin_user@example.invalid --full-name "Security Operator" \
+    --org "Example SOC" --use-case soc --deploy-target linux --password-env LAB_PW | grep Registered
+$ED login --username admin_user --password-env LAB_PW
 $ED intel update
 nohup $ED run --headless --mode "$MODE" --syslog-port 5514 --log-file /tmp/eldoctor-sim/auth.log \
       > /tmp/ed_agent.log 2>&1 &

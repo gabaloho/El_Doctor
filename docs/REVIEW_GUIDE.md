@@ -64,20 +64,20 @@ Reference outputs from the sandbox are in `docs/verification-report-full.txt`,
 export ELDOCTOR_HOME=/tmp/rev ELDOCTOR_CLIENT_DIR=/tmp/rev-client P='Str0ng!Passw0rd'
 ED="python3 -m eldoctor"
 $ED alerts; echo $?                                   # 2: registration required (decided by the agent)
-$ED register --non-interactive --username alice --email a@x.io --password-env P
-$ED login --username alice --password-env P           # JWT stored in /tmp/rev-client/sessions/, 0600
+$ED register --non-interactive --username admin_user --email a@example.invalid --password-env P
+$ED login --username admin_user --password-env P           # JWT stored in /tmp/rev-client/sessions/, 0600
 $ED run --headless --mode monitor --duration 300 &    # agent + API on /tmp/rev/api.sock
 sleep 5; $ED whoami                                   # "OS identity seen by the agent: ... via unix"
 ls -l /tmp/rev/api.sock /tmp/rev/keys/audit-chain/    # socket 0600; exactly ONE signing key (the next one)
 $ED audit                                             # who did what, with OS user / front end per record
 $ED audit verify                                      # OK ... N forward-secure Ed25519 signatures ... genesis
 $ED audit verify-export /tmp/rev/audit.jsonl          # the forwarded copy verifies with public info only
-ELDOCTOR_CLIENT_DIR=/tmp/rev-bob $ED register --non-interactive --username bob --email b@x.io --password-env P
-ELDOCTOR_CLIENT_DIR=/tmp/rev-bob $ED login --username bob --password-env P
-ELDOCTOR_CLIENT_DIR=/tmp/rev-bob $ED audit; echo $?   # 3: viewer refused by the agent, logged as api_denied
+ELDOCTOR_CLIENT_DIR=/tmp/rev-user_two $ED register --non-interactive --username user_two --email b@example.invalid --password-env P
+ELDOCTOR_CLIENT_DIR=/tmp/rev-user_two $ED login --username user_two --password-env P
+ELDOCTOR_CLIENT_DIR=/tmp/rev-user_two $ED audit; echo $?   # 3: viewer refused by the agent, logged as api_denied
 python3 -c "import sqlite3; sqlite3.connect('/tmp/rev/eldoctor.db').execute(
-  \"UPDATE users SET role='admin' WHERE username='bob'\").connection.commit()"   # bob edits the DB
-ELDOCTOR_CLIENT_DIR=/tmp/rev-bob $ED audit; echo $?   # 2: bob's session refused - account record tampered
+  \"UPDATE users SET role='admin' WHERE username='user_two'\").connection.commit()"   # user_two edits the DB
+ELDOCTOR_CLIENT_DIR=/tmp/rev-user_two $ED audit; echo $?   # 2: user_two's session refused - account record tampered
 $ED audit verify; echo $?                             # TAMPERED ... user 2: row was modified ...; exit 4
 $ED alerts | grep ED-INT-001                          # the critical "integrity violation" incident (integrity: ok)
 kill %1
@@ -85,7 +85,7 @@ kill %1
 
 To see the service deployment model (lockdown, service identity):
 `python3 -m eldoctor service --bootstrap --duration 5` with
-`ELDOCTOR_ADMIN_USER=owner ELDOCTOR_ADMIN_EMAIL=o@x.io` set. Afterwards, `stat -c '%a %n' $ELDOCTOR_HOME
+`ELDOCTOR_ADMIN_USER=owner ELDOCTOR_ADMIN_EMAIL=o@example.invalid` set. Afterwards, `stat -c '%a %n' $ELDOCTOR_HOME
 $ELDOCTOR_HOME/*` shows 700 for the folder and 600 for the files.
 
 ---

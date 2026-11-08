@@ -68,12 +68,12 @@ def diag(a):
             f"status={m.status_msg.get()!r} refreshes={getattr(m, '_refreshes', '?')}")
 
 
-def register_and_login(a, username="alice", password=PW):
+def register_and_login(a, username="admin_user", password=PW):
     assert a.auth and a.auth.mode == "register"
     v = a.auth.vars
     v["username"].set(username)
-    v["full_name"].set("Alice Analyst")
-    v["email"].set("alice@acme.example")
+    v["full_name"].set("Security Operator")
+    v["email"].set("admin_user@example.invalid")
     v["pw"].set(password)
     v["pw2"].set(password)
     a.auth.submit()
@@ -87,8 +87,8 @@ def register_and_login(a, username="alice", password=PW):
 def test_registration_validation_and_login(app):
     a = app()
     v = a.auth.vars
-    v["username"].set("alice")
-    v["email"].set("alice@acme.example")
+    v["username"].set("admin_user")
+    v["email"].set("admin_user@example.invalid")
     v["pw"].set(PW)
     v["pw2"].set("different!A1x")
     a.auth.submit()
@@ -113,7 +113,7 @@ def test_wrong_password_and_lockout_message(app, cfg):
     a.api.logout()
     a.show_auth("login")
     for _ in range(5):
-        a.auth.vars["username"].set("alice")
+        a.auth.vars["username"].set("admin_user")
         a.auth.vars["pw"].set("Wrong!Passw0rd")
         a.auth.submit()
     assert "locked" in a.auth.err.get()
@@ -131,10 +131,10 @@ def test_manual_kill_from_process_tab(app):
         main.proc_action("kill")
         victim.wait(timeout=10)
         acts = a.api.call("actions.list", limit=10)
-        assert acts[0]["action"] == "kill" and acts[0]["status"] == "success" and acts[0]["actor"] == "alice"
+        assert acts[0]["action"] == "kill" and acts[0]["status"] == "success" and acts[0]["actor"] == "admin_user"
         # the agent recorded who did it, including the OS identity and the front end
         rec = next(r for r in a.api.call("audit.list", limit=20) if r["event"] == "manual_kill")
-        assert rec["actor"] == "alice" and rec["client"] == "gui" and rec["os_uid"] == str(os.getuid())
+        assert rec["actor"] == "admin_user" and rec["client"] == "gui" and rec["os_uid"] == str(os.getuid())
     finally:
         if victim.poll() is None:
             victim.kill()
@@ -166,7 +166,7 @@ def test_interactive_approval_from_gui(app):
         assert pump(a, 10, until=lambda: hog.poll() is not None), "hog not killed after approval"
         main.refresh(force=True)
         hist = [main.aphist.item(i, "values") for i in main.aphist.get_children("")]
-        assert hist and hist[0][2] == "approved" and hist[0][3] == "alice"
+        assert hist and hist[0][2] == "approved" and hist[0][3] == "admin_user"
     finally:
         if hog.poll() is None:
             hog.kill()
@@ -205,12 +205,12 @@ def test_deploy_tab_generates_bundle(app, tmp_path):
 
 def test_viewer_is_read_only(app, store):
     from eldoctor.auth.users import UserManager
-    UserManager(store).register("admin1", PW, "a@x.io")
+    UserManager(store).register("admin1", PW, "a@example.invalid")
     a = app()
     assert a.auth.mode == "login"
     a.show_auth("register")
     v = a.auth.vars
-    for k, val in (("username", "bob"), ("email", "b@x.io"), ("pw", "B0b!Passw0rd"), ("pw2", "B0b!Passw0rd")):
+    for k, val in (("username", "user_two"), ("email", "b@example.invalid"), ("pw", "B0b!Passw0rd"), ("pw2", "B0b!Passw0rd")):
         v[k].set(val)
     a.auth.submit()
     a.auth.vars["pw"].set("B0b!Passw0rd")
@@ -233,12 +233,12 @@ def test_gui_attaches_to_running_service(app, cfg):
     from eldoctor.api.server import AgentService
     svc = AgentService(cfg, role="service")
     try:
-        admin, _ = svc.um.register("alice", PW, "a@x.io")
+        admin, _ = svc.um.register("admin_user", PW, "a@example.invalid")
         svc.start_listener()
         svc.start_agent(admin, "monitor")
         a = app("enforce")
         assert a.auth.mode == "login" and not a.api.hosted            # talking to the service over the socket
-        a.auth.vars["username"].set("alice")
+        a.auth.vars["username"].set("admin_user")
         a.auth.vars["pw"].set(PW)
         a.auth.submit()
         assert a.main is not None and a.attached_pid == os.getpid()
@@ -314,7 +314,7 @@ def test_live_theme_switch_keeps_agent_tab_and_selection(app, monkeypatch):
 
 def test_auth_screen_toggle_keeps_username(app):
     a = app()
-    a.auth.vars["username"].set("carol")
+    a.auth.vars["username"].set("analyst_user")
     before = a.theme
     a.toggle_theme()
-    assert a.theme != before and a.auth.mode == "register" and a.auth.vars["username"].get() == "carol"
+    assert a.theme != before and a.auth.mode == "register" and a.auth.vars["username"].get() == "analyst_user"

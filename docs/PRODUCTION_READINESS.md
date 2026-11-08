@@ -25,7 +25,7 @@ Priorities:
 ## P0: blockers
 
 ### P0-1. Permissions are enforced by the user interfaces, not by the agent — **RESOLVED**
-**Original evidence:** a self-registered *viewer* ("mallory") has no approve permission. She wrote
+**Original evidence:** a self-registered *viewer* ("attacker_user") has no approve permission. She wrote
 `status='approved', decided_by='admin1'` straight into `eldoctor.db`. The agent then **killed the
 process**, and the audit trail showed the approval as coming from *admin1*. Roles were checked in
 `cli.py` / `gui.py`; the agent (`PlaybookEngine.process_approvals`) trusted whatever was in the

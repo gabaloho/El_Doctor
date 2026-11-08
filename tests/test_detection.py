@@ -117,7 +117,7 @@ def test_sudo_failures_and_user_creation(engine):
     a = []
     for i in range(3):
         a += engine.on_log(parse_syslog_line(
-            "Nov  4 22:04:01 h sudo: pam_unix(sudo:auth): authentication failure; logname=bob uid=1 user=bob"), now=10 + i)
+            "Nov  4 22:04:01 h sudo: pam_unix(sudo:auth): authentication failure; logname=user_two uid=1 user=user_two"), now=10 + i)
     a += engine.on_log(parse_syslog_line("Nov  4 22:04:09 h useradd[7]: new user: name=backdoor, UID=1002"), now=20)
     assert {"ED-LOG-003", "ED-LOG-004"} <= ids(a)
 
@@ -129,7 +129,7 @@ SYSMON_XML = """<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/ev
 <EventID>1</EventID><EventRecordID>77</EventRecordID><Channel>Microsoft-Windows-Sysmon/Operational</Channel><Computer>WS1</Computer></System>
 <EventData><Data Name='ProcessId'>4321</Data><Data Name='Image'>C:\\Windows\\System32\\vssadmin.exe</Data>
 <Data Name='CommandLine'>vssadmin.exe delete shadows /all /quiet</Data><Data Name='ParentImage'>C:\\Windows\\System32\\cmd.exe</Data>
-<Data Name='User'>WS1\\bob</Data></EventData></Event>"""
+<Data Name='User'>WS1\\user_two</Data></EventData></Event>"""
 
 
 def test_windows_event_parsing_and_detection(engine):

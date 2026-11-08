@@ -125,10 +125,10 @@ notifications:
     #   smtp_host: smtp.gmail.com
     #   smtp_port: 587
     #   starttls: true
-    #   username: you@example.com
+    #   username: you@example.invalid
     #   password_env: ELDOCTOR_SMTP_PASSWORD
-    #   from: you@example.com
-    #   to: [soc@example.com]
+    #   from: you@example.invalid
+    #   to: [soc@example.invalid]
     #   min_severity: high
     # - {type: slack,   url_env: ELDOCTOR_SLACK_WEBHOOK}
     # - {type: teams,   url_env: ELDOCTOR_TEAMS_WEBHOOK}

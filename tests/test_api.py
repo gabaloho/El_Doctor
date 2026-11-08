@@ -42,22 +42,22 @@ def client(svc, peer=None, name="cli"):
     return c
 
 
-def other_peer(uid="4242", user="mallory", groups=()):
+def other_peer(uid="4242", user="attacker_user", groups=()):
     return Peer(pid=31337, uid=uid, user=user, groups=list(groups), transport="unix")
 
 
 @pytest.fixture
 def team(svc):
-    """admin1 (admin), ana (analyst), vic (viewer), each logged in through the API from this OS account."""
+    """admin1 (admin), analyst_user (analyst), viewer_user (viewer), each logged in through the API from this OS account."""
     admin = client(svc)
-    admin.call("auth.register", username="admin1", password=PW, email="a@x.io")
+    admin.call("auth.register", username="admin1", password=PW, email="a@example.invalid")
     admin.login("admin1", PW)
-    admin.call("users.add", username="ana", password="An4lyst!Passw0rd", email="b@x.io", role="analyst")
-    client(svc).call("auth.register", username="vic", password="V1ewer!Passw0rd", email="v@x.io")  # self-service
-    ana, vic = client(svc), client(svc)
-    ana.login("ana", "An4lyst!Passw0rd")
-    vic.login("vic", "V1ewer!Passw0rd")
-    return {"admin": admin, "analyst": ana, "viewer": vic}
+    admin.call("users.add", username="analyst_user", password="An4lyst!Passw0rd", email="b@example.invalid", role="analyst")
+    client(svc).call("auth.register", username="viewer_user", password="V1ewer!Passw0rd", email="v@example.invalid")  # self-service
+    analyst_user, viewer_user = client(svc), client(svc)
+    analyst_user.login("analyst_user", "An4lyst!Passw0rd")
+    viewer_user.login("viewer_user", "V1ewer!Passw0rd")
+    return {"admin": admin, "analyst": analyst_user, "viewer": viewer_user}
 
 
 # ------------------------------------------------------------------ RBAC is enforced in the agent
@@ -81,27 +81,27 @@ def test_agent_refuses_every_call_the_role_does_not_allow(svc, team, role):
         assert e.value.data["perm"] == spec.perm
     denied = svc.store.query("SELECT actor, details FROM audit WHERE event = 'api_denied'")
     if role != "admin":
-        assert any(r["actor"] == ("vic" if role == "viewer" else "ana") for r in denied)
+        assert any(r["actor"] == ("viewer_user" if role == "viewer" else "analyst_user") for r in denied)
 
 
 def test_viewer_cannot_approve_enforce_or_kill_even_calling_the_agent_directly(svc, team, cfg):
-    vic, ana = team["viewer"], team["analyst"]
+    viewer_user, analyst_user = team["viewer"], team["analyst"]
     alert = Alert(rule_id="ED-LOG-001", title="bf", severity="high", remote_ip="203.0.113.9")
     aid = svc.store.create_approval(alert, "pb-brute-force", 0, "block 203.0.113.9", 300)
-    for call in (lambda: vic.call("approvals.decide", id=aid, decision="approve"),
-                 lambda: vic.call("respond.process", action="kill", pid=os.getpid()),
-                 lambda: vic.call("users.set_role", username="vic", role="admin"),
-                 lambda: ana.call("users.set_role", username="ana", role="admin"),
-                 lambda: ana.call("audit.list"),
-                 lambda: ana.call("scan.run", respond=True, mode="enforce")):
+    for call in (lambda: viewer_user.call("approvals.decide", id=aid, decision="approve"),
+                 lambda: viewer_user.call("respond.process", action="kill", pid=os.getpid()),
+                 lambda: viewer_user.call("users.set_role", username="viewer_user", role="admin"),
+                 lambda: analyst_user.call("users.set_role", username="analyst_user", role="admin"),
+                 lambda: analyst_user.call("audit.list"),
+                 lambda: analyst_user.call("scan.run", respond=True, mode="enforce")):
         with pytest.raises(ApiError) as e:
             call()
         assert e.value.code == "forbidden"
     assert svc.store.get_approval(aid)["status"] == "pending"
-    res = ana.call("approvals.decide", id=aid, decision="deny")
-    assert res["decided_by"] == "ana"
+    res = analyst_user.call("approvals.decide", id=aid, decision="deny")
+    assert res["decided_by"] == "analyst_user"
     rec = [r for r in svc.store.list_audit(50) if r["event"] == "approval_decided"][0]
-    assert rec["actor"] == "ana" and rec["os_uid"] == str(os.getuid()) and rec["client"] == "cli"
+    assert rec["actor"] == "analyst_user" and rec["os_uid"] == str(os.getuid()) and rec["client"] == "cli"
 
 
 def test_admin_os_group_policy(svc, team, cfg):
@@ -127,14 +127,14 @@ def test_allowed_os_accounts_policy(svc, team):
 
 def test_first_admin_only_from_the_agents_os_account(svc):
     with pytest.raises(ApiError) as e:
-        client(svc, other_peer()).call("auth.register", username="eve", password=PW, email="e@x.io")
+        client(svc, other_peer()).call("auth.register", username="user_four", password=PW, email="e@example.invalid")
     assert e.value.code == "forbidden" and svc.um.count() == 0
-    client(svc).call("auth.register", username="owner", password=PW, email="o@x.io")
-    res = client(svc, other_peer()).call("auth.register", username="eve", password="Ev3!Passw0rd!", email="e@x.io")
+    client(svc).call("auth.register", username="owner", password=PW, email="o@example.invalid")
+    res = client(svc, other_peer()).call("auth.register", username="user_four", password="Ev3!Passw0rd!", email="e@example.invalid")
     assert res["user"]["role"] == "viewer"
     svc.cfg["registration"]["self_service"] = False
     with pytest.raises(ApiError):
-        client(svc, other_peer()).call("auth.register", username="eve2", password="Ev3!Passw0rd!", email="e@x.io")
+        client(svc, other_peer()).call("auth.register", username="eve2", password="Ev3!Passw0rd!", email="e@example.invalid")
 
 
 # ------------------------------------------------------------------ stateless tokens
@@ -162,18 +162,18 @@ def _forge(token, **changes):
 
 
 def test_forged_expired_and_alg_none_tokens_are_refused(svc, team):
-    vic = team["viewer"]
-    bad = [_forge(vic.token, role="admin", uid=1, sub="admin1"),
+    viewer_user = team["viewer"]
+    bad = [_forge(viewer_user.token, role="admin", uid=1, sub="admin1"),
            base64.urlsafe_b64encode(b'{"alg":"none","typ":"JWT"}').rstrip(b"=").decode() + "." +
-           vic.token.split(".")[1] + ".",
-           "garbage", vic.token[:-3] + "AAA"]
+           viewer_user.token.split(".")[1] + ".",
+           "garbage", viewer_user.token[:-3] + "AAA"]
     for t in bad:
         c = client(svc)
         c.token = t
         with pytest.raises(ApiError) as e:
             c.call("auth.whoami")
         assert e.value.code == "unauthenticated", t
-    expired = svc.tokens.issue(svc.um.get("vic"), str(os.getuid()), lifetime_s=-3600)["token"]
+    expired = svc.tokens.issue(svc.um.get("viewer_user"), str(os.getuid()), lifetime_s=-3600)["token"]
     c = client(svc)
     c.token = expired
     with pytest.raises(ApiError, match="expired"):
@@ -181,15 +181,15 @@ def test_forged_expired_and_alg_none_tokens_are_refused(svc, team):
 
 
 def test_role_change_disable_and_logout_revoke_tokens(svc, team):
-    admin, ana = team["admin"], team["analyst"]
-    assert ana.whoami()["role"] == "analyst"
-    admin.call("users.set_role", username="ana", role="viewer")
+    admin, analyst_user = team["admin"], team["analyst"]
+    assert analyst_user.whoami()["role"] == "analyst"
+    admin.call("users.set_role", username="analyst_user", role="viewer")
     with pytest.raises(ApiError, match="revoked"):
-        ana.call("alerts.list")
-    ana.login("ana", "An4lyst!Passw0rd")
-    assert ana.whoami()["role"] == "viewer" and "approve" not in ana.whoami()["permissions"]
-    admin.call("users.set_active", username="ana", active=False)
-    assert ana.whoami() is None
+        analyst_user.call("alerts.list")
+    analyst_user.login("analyst_user", "An4lyst!Passw0rd")
+    assert analyst_user.whoami()["role"] == "viewer" and "approve" not in analyst_user.whoami()["permissions"]
+    admin.call("users.set_active", username="analyst_user", active=False)
+    assert analyst_user.whoami() is None
     old = admin.token
     admin.logout()
     c = client(svc)
@@ -208,13 +208,13 @@ def test_manual_response_resolves_the_process_itself(svc, team):
     p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     try:
         time.sleep(0.3)
-        ana = team["analyst"]
+        analyst_user = team["analyst"]
         with pytest.raises(ApiError) as e:
-            ana.call("respond.process", action="kill", pid=p.pid, create_time=1.0)    # PID reuse guard
+            analyst_user.call("respond.process", action="kill", pid=p.pid, create_time=1.0)    # PID reuse guard
         assert e.value.code == "conflict"
         with pytest.raises(ApiError):
-            ana.call("respond.process", action="rm -rf", pid=p.pid)
-        res = ana.call("respond.process", action="kill", pid=p.pid, exe="/etc/passwd")  # extra fields are ignored
+            analyst_user.call("respond.process", action="rm -rf", pid=p.pid)
+        res = analyst_user.call("respond.process", action="kill", pid=p.pid, exe="/etc/passwd")  # extra fields are ignored
         assert res["status"] == "success"
         p.wait(timeout=5)
     finally:
@@ -230,7 +230,7 @@ def test_unix_socket_with_kernel_peer_credentials(svc, team):
     t = UnixTransport(srv.endpoint).connect()
     assert t.server.pid == os.getpid() and t.server.uid == str(os.getuid())
     c = ApiClient(t, "cli")
-    c.login("ana", "An4lyst!Passw0rd")
+    c.login("analyst_user", "An4lyst!Passw0rd")
     who = c.call("auth.whoami")
     assert who["peer"]["transport"] == "unix" and who["peer"]["pid"] == os.getpid()
     # many requests over one connection, from two threads
@@ -368,7 +368,7 @@ def test_audit_forwarded_to_siem_in_real_time_and_verifiable(cfg, tmp_path):
     svc.forwarder.start()
     try:
         c = client(svc)
-        c.call("auth.register", username="admin1", password=PW, email="a@x.io")
+        c.call("auth.register", username="admin1", password=PW, email="a@example.invalid")
         t0 = time.time()
         c.login("admin1", PW)
         head = svc.store.audit_head()["seq"]
@@ -485,7 +485,7 @@ def test_cli_is_a_client_of_the_running_service(tmp_path):
     cfgf = tmp_path / "cfg.yaml"
     cfgf.write_text("notifications: {channels: []}\nlogs: {files: [], journald: false, auditd: false}\n"
                     f"safety: {{only_descendants_of: [{os.getpid()}]}}\nagent: {{initial_scan: false}}\n")
-    env = {"ELDOCTOR_ADMIN_USER": "owner", "ELDOCTOR_ADMIN_EMAIL": "o@x.io", "ELDOCTOR_ADMIN_PASSWORD": PW}
+    env = {"ELDOCTOR_ADMIN_USER": "owner", "ELDOCTOR_ADMIN_EMAIL": "o@example.invalid", "ELDOCTOR_ADMIN_PASSWORD": PW}
     svc = subprocess.Popen([sys.executable, "-m", "eldoctor", "--config", str(cfgf), "service", "--bootstrap",
                             "--mode", "interactive", "--duration", "60"], cwd=str(ROOT), env=dict(os.environ, **env),
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -505,13 +505,13 @@ def test_cli_is_a_client_of_the_running_service(tmp_path):
         assert c("login", "--username", "owner", "--password-env", "P", env={"P": PW}).returncode == 0
         who = c("whoami").stdout
         assert "agent: service" in who and "via unix" in who, who
-        vic_client = tmp_path / "vic-client"                                     # vic's own client folder
+        vic_client = tmp_path / "viewer_user-client"                                     # viewer_user's own client folder
         v = lambda *a, **k: run_cli("--config", str(cfgf), *a, env=dict(k.pop("env", {}),          # noqa: E731
                                                                        ELDOCTOR_CLIENT_DIR=str(vic_client)), **k)
-        r = v("register", "--non-interactive", "--username", "vic", "--email", "v@x.io", "--password-env", "P",
+        r = v("register", "--non-interactive", "--username", "viewer_user", "--email", "v@example.invalid", "--password-env", "P",
               "--json", env={"P": "V1ewer!Passw0rd"})
         assert json.loads(r.stdout)["role"] == "viewer", r.stderr
-        assert v("login", "--username", "vic", "--password-env", "P", env={"P": "V1ewer!Passw0rd"}).returncode == 0
+        assert v("login", "--username", "viewer_user", "--password-env", "P", env={"P": "V1ewer!Passw0rd"}).returncode == 0
         r = v("approvals", "approve", "deadbeef")
         assert r.returncode == 3 and "checked by the agent" in r.stderr
         assert v("audit").returncode == 3

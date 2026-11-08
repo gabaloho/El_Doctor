@@ -30,7 +30,7 @@ def raw(store):
 
 def fill(store, n=8):
     for i in range(n):
-        store.audit("alice", f"event_{i}", {"i": i})
+        store.audit("admin_user", f"event_{i}", {"i": i})
 
 
 def problems(res):
@@ -186,24 +186,24 @@ def test_alerts_and_actions_are_tamper_evident(store):
 def test_hmac_key_holder_cannot_promote_a_user(store, cfg):
     """With the master key the seal can be recomputed - the signed chain still says 'viewer'."""
     um = UserManager(store, cfg)
-    um.register("owner", PW, "o@x.io")
-    um.register("mallory", "M4llory!Passw0rd", "m@x.io")
-    r = dict(store.query("SELECT * FROM users WHERE username = 'mallory'")[0], role="admin")
+    um.register("owner", PW, "o@example.invalid")
+    um.register("attacker_user", "M4llory!Passw0rd", "m@example.invalid")
+    r = dict(store.query("SELECT * FROM users WHERE username = 'attacker_user'")[0], role="admin")
     raw(store).execute("UPDATE users SET role = 'admin', seal = ? WHERE id = ?",
                        (store.keys.seal("user", store._user_fields(r)), r["id"]))
     assert store.keys.check_seal("user", store._user_fields(r), store.keys.seal("user", store._user_fields(r)))
     for s in (Store(store.path), store):                       # fast path and a fresh verified index
         if s is not store:
             s.enable_verified_ledger()
-        assert UserManager(s, cfg).get("mallory") is None
+        assert UserManager(s, cfg).get("attacker_user") is None
 
 
 def test_key_holder_cannot_rewrite_the_ledger_record_either(store, cfg):
     """... and rewriting the user's ledger record in the chain to match is caught (destroyed key)."""
     um = UserManager(store, cfg)
-    um.register("owner", PW, "o@x.io")
-    um.register("mallory", "M4llory!Passw0rd", "m@x.io")
-    r = dict(store.query("SELECT * FROM users WHERE username = 'mallory'")[0], role="admin")
+    um.register("owner", PW, "o@example.invalid")
+    um.register("attacker_user", "M4llory!Passw0rd", "m@example.invalid")
+    r = dict(store.query("SELECT * FROM users WHERE username = 'attacker_user'")[0], role="admin")
     raw(store).execute("UPDATE users SET role = 'admin', seal = ? WHERE id = ?",
                        (store.keys.seal("user", store._user_fields(r)), r["id"]))
     led = store.query("SELECT id FROM audit WHERE ref_kind = 'user' AND ref_id = ? ORDER BY id DESC LIMIT 1",
@@ -211,8 +211,8 @@ def test_key_holder_cannot_rewrite_the_ledger_record_either(store, cfg):
     attacker_rewrite(store, led, ref_digest=store.row_digest("user", r))
     agent_view = Store(store.path)
     agent_view.enable_verified_ledger()
-    assert UserManager(agent_view, cfg).get("mallory") is None
-    assert UserManager(Store(store.path), cfg).get("mallory") is None
+    assert UserManager(agent_view, cfg).get("attacker_user") is None
+    assert UserManager(Store(store.path), cfg).get("attacker_user") is None
     assert not Store(store.path).verify_audit()["ok"]
 
 
@@ -249,7 +249,7 @@ def test_api_and_cli_show_row_integrity(cfg, tmp_path):
     try:
         c = ApiClient(InProcessTransport(svc.handle, own_identity(), "x"))
         c.token = None
-        c.call("auth.register", username="owner", password=PW, email="o@x.io")
+        c.call("auth.register", username="owner", password=PW, email="o@example.invalid")
         c.login("owner", PW)
         ok, bad = Alert(rule_id="A", title="kept", severity="high"), Alert(rule_id="B", title="edited", severity="high")
         svc.store.add_alert(ok)
@@ -273,7 +273,7 @@ def test_cli_verify_prints_the_genesis_and_checks_exports(tmp_path):
     def cli(*a):
         return subprocess.run([sys.executable, "-m", "eldoctor", *a], cwd=str(root), env=env, capture_output=True,
                               text=True, timeout=120)
-    cli("register", "--non-interactive", "--username", "owner", "--email", "o@x.io", "--password-env", "P")
+    cli("register", "--non-interactive", "--username", "owner", "--email", "o@example.invalid", "--password-env", "P")
     cli("login", "--username", "owner", "--password-env", "P")
     r = cli("audit", "verify")
     assert r.returncode == 0 and "Ed25519" in r.stdout and "genesis signing key: ed25519:" in r.stdout, r.stdout
@@ -298,7 +298,7 @@ def test_database_from_the_first_chain_version_is_upgraded(store, cfg):
     """v1 records (hash chain + HMAC, no signatures, no ledger) continue under a signed v2 chain."""
     from eldoctor.integrity import GENESIS
     um = UserManager(store, cfg)
-    um.register("owner", PW, "o@x.io")
+    um.register("owner", PW, "o@example.invalid")
     store.add_alert(Alert(rule_id="A", title="old alert", severity="high"))
     db = raw(store)
     old = [dict(r) for r in db.execute("SELECT *, id AS seq FROM audit WHERE ref_kind IS NULL OR ref_kind = '' "

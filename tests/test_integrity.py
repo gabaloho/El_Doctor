@@ -41,10 +41,10 @@ def victim():
 @pytest.fixture
 def people(store, cfg):
     um = UserManager(store, cfg)
-    admin, _ = um.register("admin1", PW, "a@x.io")
-    analyst, _ = um.register("ana", "An4lyst!Passw0rd", "b@x.io", role="analyst", created_by=admin)
-    mallory, _ = um.register("mallory", "M4llory!Passw0rd", "m@x.io")          # self-registered: viewer
-    return um, admin, analyst, mallory
+    admin, _ = um.register("admin1", PW, "a@example.invalid")
+    analyst, _ = um.register("analyst_user", "An4lyst!Passw0rd", "b@example.invalid", role="analyst", created_by=admin)
+    attacker_user, _ = um.register("attacker_user", "M4llory!Passw0rd", "m@example.invalid")          # self-registered: viewer
+    return um, admin, analyst, attacker_user
 
 
 def pending_for(agent, victim):
@@ -67,8 +67,8 @@ def violations(store, kind=None):
 # ------------------------------------------------------------------ approvals
 def test_p0_1_forged_approval_is_refused_and_raised(cfg, store, people, victim):
     """The exact audit finding: a viewer writes status='approved', decided_by='admin1' into the DB."""
-    um, admin, _, mallory = people
-    assert not mallory.can("approve")
+    um, admin, _, attacker_user = people
+    assert not attacker_user.can("approve")
     agent = Agent(cfg, store, admin, mode="interactive")
     try:
         aid = pending_for(agent, victim)
@@ -141,8 +141,8 @@ def test_approver_demoted_before_execution_is_refused(cfg, store, people, victim
     agent = Agent(cfg, store, admin, mode="interactive")
     try:
         aid = pending_for(agent, victim)
-        assert store.decide_approval(aid, True, "ana")
-        um.set_role(admin, "ana", "viewer")
+        assert store.decide_approval(aid, True, "analyst_user")
+        um.set_role(admin, "analyst_user", "viewer")
         agent.playbooks.process_approvals()
         time.sleep(0.5)
         assert victim.poll() is None and store.get_approval(aid)["status"] == "rejected"
@@ -157,11 +157,11 @@ def test_approved_containment_is_in_the_audit_chain(cfg, store, people, victim):
     agent = Agent(cfg, store, admin, mode="interactive")
     try:
         aid = pending_for(agent, victim)
-        assert store.decide_approval(aid, True, "ana")
+        assert store.decide_approval(aid, True, "analyst_user")
         agent.playbooks.process_approvals()
         victim.wait(timeout=10)
         events = [(r["event"], r["actor"]) for r in reversed(store.list_audit(50))]
-        i = events.index(("approval_decided", "ana"))
+        i = events.index(("approval_decided", "analyst_user"))
         assert ("approval_executed", "agent") in events[i:]
         kill = next(json.loads(r["details"]) for r in store.list_audit(50) if r["event"] == "response_action"
                     and json.loads(r["details"])["action"] == "kill")
@@ -176,9 +176,9 @@ def test_genuine_approval_executes_once_and_replay_is_refused(cfg, store, people
     agent = Agent(cfg, store, admin, mode="interactive")
     try:
         aid = pending_for(agent, victim)
-        assert store.decide_approval(aid, True, "ana")
+        assert store.decide_approval(aid, True, "analyst_user")
         runs = agent.playbooks.process_approvals()
-        assert runs and runs[0]["approved_by"] == "ana"
+        assert runs and runs[0]["approved_by"] == "analyst_user"
         victim.wait(timeout=10)
         ok, why = store.verify_approval(store.get_approval(aid))
         assert not ok and any("replay" in w for w in why)
@@ -191,22 +191,22 @@ def test_genuine_approval_executes_once_and_replay_is_refused(cfg, store, people
 
 # ------------------------------------------------------------------ users / roles
 def test_role_edited_in_db_is_never_trusted(cfg, store, people):
-    um, admin, _, mallory = people
-    raw(store).execute("UPDATE users SET role='admin' WHERE username='mallory'")
+    um, admin, _, attacker_user = people
+    raw(store).execute("UPDATE users SET role='admin' WHERE username='attacker_user'")
     with pytest.raises(AuthError, match="integrity"):
-        um.authenticate("mallory", "M4llory!Passw0rd")
-    assert um.get("mallory") is None
-    ok, why = um.can_approve("mallory")
+        um.authenticate("attacker_user", "M4llory!Passw0rd")
+    assert um.get("attacker_user") is None
+    ok, why = um.can_approve("attacker_user")
     assert not ok
-    assert violations(store, "user")[0]["id"] == "mallory"
-    assert next(u for u in um.list() if u["username"] == "mallory")["integrity"] == "invalid"
+    assert violations(store, "user")[0]["id"] == "attacker_user"
+    assert next(u for u in um.list() if u["username"] == "attacker_user")["integrity"] == "invalid"
 
 
 def test_emptied_user_table_does_not_hand_out_admin(cfg, store, people):
     um = people[0]
     raw(store).execute("DELETE FROM users")
     with pytest.raises(AuthError, match="tampering"):
-        um.register("eve", "Ev3!Passw0rd!!", "e@x.io")
+        um.register("user_four", "Ev3!Passw0rd!!", "e@example.invalid")
 
 
 # ------------------------------------------------------------------ blocks / quarantine
@@ -234,7 +234,7 @@ def test_tampered_quarantine_record_is_not_restored(cfg, store, tmp_path):
 # ------------------------------------------------------------------ audit trail
 def _fill(store, n=6):
     for i in range(n):
-        store.audit("alice", "event_%d" % i, {"i": i})
+        store.audit("admin_user", "event_%d" % i, {"i": i})
 
 
 def test_audit_chain_verifies_and_records_os_identity(store):
@@ -319,7 +319,7 @@ def test_pre_integrity_database_is_adopted_once(tmp_path, cfg):
     home.mkdir()
     db = sqlite3.connect(str(home / "eldoctor.db"))
     db.executescript(OLD_SCHEMA)
-    db.execute("INSERT INTO users (username, email, role, password_hash, active) VALUES ('old', 'o@x.io', 'admin', ?, 1)",
+    db.execute("INSERT INTO users (username, email, role, password_hash, active) VALUES ('old', 'o@example.invalid', 'admin', ?, 1)",
                (hash_password(PW),))
     for i in (1, 2, 5):                                                 # ids with a gap: renumbered on adoption
         db.execute("INSERT INTO audit (id, ts, actor, event, details) VALUES (?, ?, 'old', 'legacy', '')", (i, i))
@@ -338,7 +338,7 @@ def test_pre_integrity_database_is_adopted_once(tmp_path, cfg):
 
 
 def test_removed_integrity_metadata_is_not_silently_resealed(store, cfg):
-    UserManager(store, cfg).register("alice", PW, "a@x.io")
+    UserManager(store, cfg).register("admin_user", PW, "a@example.invalid")
     raw(store).execute("DELETE FROM meta")
     s2 = Store(store.path)
     assert s2.integrity_problems and not s2.verify_audit()["ok"]

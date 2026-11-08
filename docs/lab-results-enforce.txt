@@ -1,6 +1,6 @@
 prepared /tmp/eldoctor-sim: sleeper, payload-ioc.bin (sha256 fa714f65657ea153...), lab feeds
-Registered 'alice' with role 'admin' (use case: soc, deploy target: linux).
-Logged in as alice (admin); session valid 12h.
+Registered 'admin_user' with role 'admin' (use case: soc, deploy target: linux).
+Logged in as admin_user (admin); session valid 12h.
 lab_feodotracker_ips           OK 3 indicators
 lab_malwarebazaar_sha256       OK 2 indicators
 Python 3.12.3

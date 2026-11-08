@@ -140,7 +140,7 @@ class Origin:
     """The OS-level identity behind an operation, recorded in every audit record.
 
     The API server sets it per request from the socket's *peer credentials* (kernel-verified uid/pid),
-    so the audit trail says "analyst alice, OS user alice (uid 1001, pid 4242) via the GUI" and not just
+    so the audit trail says "analyst admin_user, OS user admin_user (uid 1001, pid 4242) via the GUI" and not just
     a username typed into a form."""
     os_user: str
     os_uid: str

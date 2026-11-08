@@ -19,8 +19,8 @@ notifications:
   channels:
     - {type: console}
     - {type: jsonl, path: alerts.jsonl}
-    - {type: email, smtp_host: 127.0.0.1, smtp_port: 2525, starttls: false, from: eldoctor@lab.local,
-       to: [soc@lab.local], min_severity: high}
+    - {type: email, smtp_host: 127.0.0.1, smtp_port: 2525, starttls: false, from: eldoctor@example.invalid,
+       to: [soc@example.invalid], min_severity: high}
     - {type: slack, url: "http://127.0.0.1:8099/slack"}
     - {type: teams, url: "http://127.0.0.1:8099/teams", min_severity: high}
     - {type: discord, url: "http://127.0.0.1:8099/discord", min_severity: high}

@@ -14,7 +14,7 @@ from eldoctor.models import Alert
 
 @pytest.fixture
 def admin(store, cfg):
-    user, _ = UserManager(store, cfg).register("alice", "Str0ng!Passw0rd", "a@x.io")
+    user, _ = UserManager(store, cfg).register("admin_user", "Str0ng!Passw0rd", "a@example.invalid")
     return user
 
 
@@ -97,9 +97,9 @@ def test_tui_renders_in_a_pty(tmp_path):
     pyte = pytest.importorskip("pyte")
     env = dict(os.environ, TERM="xterm", PW="Str0ng!Passw0rd", COLUMNS="160", LINES="45")
     base = [sys.executable, "-m", "eldoctor"]
-    subprocess.run(base + ["register", "--non-interactive", "--username", "alice", "--email", "a@x.io",
+    subprocess.run(base + ["register", "--non-interactive", "--username", "admin_user", "--email", "a@example.invalid",
                            "--password-env", "PW"], env=env, check=True, capture_output=True)
-    subprocess.run(base + ["login", "--username", "alice", "--password-env", "PW"], env=env, check=True,
+    subprocess.run(base + ["login", "--username", "admin_user", "--password-env", "PW"], env=env, check=True,
                    capture_output=True)
     import pty
     import select

@@ -85,7 +85,7 @@ def admin():
                                  "safety": {"only_descendants_of": [os.getpid()]}})
     store = Store()
     um = UserManager(store, cfg)
-    user, _ = um.register(f"verifier{um.count() + 1}", PW, "v@example.com", use_case="soc",
+    user, _ = um.register(f"verifier{um.count() + 1}", PW, "v@example.invalid", use_case="soc",
                           deployment_target="windows")
     return cfg, store, user
 
@@ -289,7 +289,7 @@ def _():
     base = f"http://127.0.0.1:{http.server_port}"
     os.environ["VERIFY_SECRET"], os.environ["VERIFY_HIVE"] = "s3cret", "hivekey"
     chans = [{"type": "email", "smtp_host": "127.0.0.1", "smtp_port": smtp.server_address[1], "starttls": False,
-              "to": ["soc@x.io"]},
+              "to": ["soc@example.invalid"]},
              {"type": "slack", "url": base + "/slack"}, {"type": "teams", "url": base + "/teams"},
              {"type": "discord", "url": base + "/discord"},
              {"type": "webhook", "name": "shuffle", "url": base + "/shuffle", "secret_env": "VERIFY_SECRET"},
@@ -313,11 +313,11 @@ def _():
 def _():
     r = cli("alerts")
     assert r.returncode == 2 and "registration" in r.stderr, r.stderr
-    r = cli("register", "--non-interactive", "--username", "owner", "--email", "o@x.io", "--use-case", "cloud",
+    r = cli("register", "--non-interactive", "--username", "owner", "--email", "o@example.invalid", "--use-case", "cloud",
             "--deploy-target", "aws", "--password-env", "P", "--json", env={"P": PW})
     assert json.loads(r.stdout)["role"] == "admin", r.stderr
     assert cli("alerts").returncode == 2                                        # registered but not logged in
-    r = cli("register", "--non-interactive", "--username", "viewer1", "--email", "v@x.io", "--password-env", "P",
+    r = cli("register", "--non-interactive", "--username", "viewer1", "--email", "v@example.invalid", "--password-env", "P",
             "--json", env={"P": "V1ewer!Passw0rd"})
     assert json.loads(r.stdout)["role"] == "viewer"
     assert cli("login", "--username", "viewer1", "--password-env", "P", env={"P": "V1ewer!Passw0rd"}).returncode == 0
@@ -335,7 +335,7 @@ def _():
     out = Path(os.environ["ELDOCTOR_HOME"]) / "deploy"
     counts = {}
     for t in TARGETS:
-        files = generate(t, out / t, {"username": "u", "email": "u@x.io"})
+        files = generate(t, out / t, {"username": "u", "email": "u@example.invalid"})
         for f in files:
             if f.suffix in (".yaml", ".yml"):
                 list(yaml.safe_load_all(f.read_text()))
@@ -516,7 +516,7 @@ def _():
         raise SkipCheck("named-pipe transport: Windows only (not executable here)")
     svc, _ = _svc()
     try:
-        _client(svc).call("auth.register", username="owner", password=PW, email="o@x.io")
+        _client(svc).call("auth.register", username="owner", password=PW, email="o@example.invalid")
         srv = svc.start_listener()
         t = UnixTransport(srv.endpoint).connect()                          # client verifies the server (SO_PEERCRED)
         assert t.server.uid == str(os.getuid()) and t.server.pid == os.getpid()
@@ -543,12 +543,12 @@ def _():
     svc, _ = _svc()
     try:
         c = _client(svc)
-        c.call("auth.register", username="owner", password=PW, email="o@x.io")
+        c.call("auth.register", username="owner", password=PW, email="o@example.invalid")
         c.login("owner", PW)
         claims = json.loads(base64.urlsafe_b64decode(c.token.split(".")[1] + "=="))
         assert claims["ouid"] == str(os.getuid()) and "jti" in claims and "exp" in claims
         assert not svc.store.query("SELECT 1 FROM sqlite_master WHERE name='sessions'")
-        thief = _client(svc, Peer(pid=1, uid="4242", user="mallory"))
+        thief = _client(svc, Peer(pid=1, uid="4242", user="attacker_user"))
         thief.token = c.token
         try:
             thief.call("alerts.list")
@@ -580,15 +580,15 @@ def _():
     svc, _ = _svc()
     try:
         admin = _client(svc)
-        admin.call("auth.register", username="owner", password=PW, email="o@x.io")
-        _client(svc).call("auth.register", username="vic", password="V1ewer!Passw0rd", email="v@x.io")
-        vic = _client(svc)
-        vic.login("vic", "V1ewer!Passw0rd")
+        admin.call("auth.register", username="owner", password=PW, email="o@example.invalid")
+        _client(svc).call("auth.register", username="viewer_user", password="V1ewer!Passw0rd", email="v@example.invalid")
+        viewer_user = _client(svc)
+        viewer_user.login("viewer_user", "V1ewer!Passw0rd")
         refused = 0
         for name, spec in METHODS.items():
             if spec.perm and spec.perm not in PERMISSIONS["viewer"]:
                 try:
-                    vic.call(name)
+                    viewer_user.call(name)
                 except ApiError as exc:
                     assert exc.code == "forbidden", name
                     refused += 1
@@ -609,7 +609,7 @@ def _():
     (home / "stray.txt").write_text("x")
     os.chmod(home / "stray.txt", 0o666)
     r = cli("service", "--bootstrap", "--duration", "2", "--mode", "monitor",
-            env={"ELDOCTOR_ADMIN_USER": "owner", "ELDOCTOR_ADMIN_EMAIL": "o@x.io"})
+            env={"ELDOCTOR_ADMIN_USER": "owner", "ELDOCTOR_ADMIN_EMAIL": "o@example.invalid"})
     assert r.returncode == 0, r.stderr[-500:]
     assert "lockdown fixed" in r.stdout
     modes = {p.relative_to(home).as_posix(): oct(stat.S_IMODE(os.lstat(p).st_mode)) for p in [home, *home.rglob("*")]
@@ -626,7 +626,7 @@ def _():
     svc, _ = _svc()
     try:
         for i in range(5):
-            svc.store.audit("alice", f"event_{i}", {"i": i})
+            svc.store.audit("admin_user", f"event_{i}", {"i": i})
         assert svc.verify_audit()["ok"]
         path = svc.store.path
     finally:
@@ -662,7 +662,7 @@ def _():
     try:
         svc.forwarder.start()
         t0 = time.time()
-        _client(svc).call("auth.register", username="owner", password=PW, email="o@x.io")
+        _client(svc).call("auth.register", username="owner", password=PW, email="o@example.invalid")
         conn, _ = srv.accept()
         conn.settimeout(5)
         buf = b""
@@ -687,7 +687,7 @@ def _():
     from eldoctor.models import Alert
     cfg, store, user = admin()
     um_v = __import__("eldoctor.auth.users", fromlist=["UserManager"]).UserManager(store, cfg)
-    um_v.register("mallory", "M4llory!Passw0rd", "m@x.io")
+    um_v.register("attacker_user", "M4llory!Passw0rd", "m@example.invalid")
     agent = Agent(cfg, store, user, mode="interactive")
     v = spawn()
     try:
@@ -697,14 +697,14 @@ def _():
         db = sqlite3.connect(str(store.path), isolation_level=None)
         db.execute("UPDATE approvals SET status='approved', decided_by=?, decided_ts=? WHERE id=?",
                    (user.username, time.time(), aid))
-        db.execute("UPDATE users SET role='admin' WHERE username='mallory'")
+        db.execute("UPDATE users SET role='admin' WHERE username='attacker_user'")
         db.close()
         agent.playbooks.process_approvals()
         time.sleep(0.5)
         assert v.poll() is None, "forged approval executed"
         assert store.get_approval(aid)["status"] == "rejected"
         assert store.query("SELECT 1 FROM alerts WHERE rule_id='ED-INT-001'")
-        assert um_v.get("mallory") is None                         # edited role -> account not trusted
+        assert um_v.get("attacker_user") is None                         # edited role -> account not trusted
         return "forged approval not executed (process alive, status 'rejected', ED-INT-001); forged admin role refused"
     finally:
         agent.dispatcher.close()
@@ -726,7 +726,7 @@ def _():
     from eldoctor.storage import Store
     store = Store()
     for i in range(6):
-        store.audit("alice", f"event_{i}", {"i": i})
+        store.audit("admin_user", f"event_{i}", {"i": i})
     rows = store.query("SELECT *, id AS seq FROM audit ORDER BY id")
     on_disk = {p.stem for p in store.signer.dir.glob("*.key")}
     assert on_disk == {rows[-1]["next_pub"]}, "used signing keys must be destroyed"
@@ -776,8 +776,8 @@ def _():
     from eldoctor.models import Alert
     cfg, store, owner = admin()
     um = UserManager(store, cfg)
-    um.register("mallory", "M4llory!Passw0rd", "m@x.io")
-    r = dict(store.query("SELECT * FROM users WHERE username='mallory'")[0], role="admin")
+    um.register("attacker_user", "M4llory!Passw0rd", "m@example.invalid")
+    r = dict(store.query("SELECT * FROM users WHERE username='attacker_user'")[0], role="admin")
     db = _raw(store)
     db.execute("UPDATE users SET role='admin', seal=? WHERE id=?", (store.keys.seal("user", store._user_fields(r)), r["id"]))
     fake = {"ip": "8.8.8.8", "ts": 0.0, "expires": 0.0, "reason": "x", "alert_id": "", "backend": "app-level", "active": 1}
@@ -786,7 +786,7 @@ def _():
     ap = dict(store.get_approval(aid), step_index=7)
     db.execute("UPDATE approvals SET step_index=7, req_mac=? WHERE id=?",
                (store.keys.seal("approval_request", store._approval_req_fields(ap)), aid))
-    assert um.get("mallory") is None
+    assert um.get("attacker_user") is None
     assert "8.8.8.8" not in [b["ip"] for b in store.active_blocks()]
     assert not store.decide_approval(aid, True, owner.username)
     return "recomputed HMAC seals accepted by no check: role=admin, forged IP block, retargeted approval all refused"

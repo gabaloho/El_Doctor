@@ -55,7 +55,7 @@ What the status column means:
 
 | ID | Requirement | Implementation | Verification | Status |
 |---|---|---|---|---|
-| R3.1 | Desktop GUI with all functions; run it | `ui/gui.py` (9 tabs), `ui/launch.py`, `el_doctor_gui.pyw`, `eldoctor gui` | R3.1 (runs `tests/test_gui.py`), screenshots `docs/screenshots/gui_*` | Verified live on Linux (Tk 9). Not run on Windows |
+| R3.1 | Desktop GUI with all functions; run it | `ui/gui.py` (9 tabs), `ui/launch.py`, `el_doctor_gui.pyw`, `eldoctor gui` | R3.1 (runs `tests/test_gui.py`); screenshots omitted from the public repo for privacy | Verified live on Linux (Tk 9). Not run on Windows |
 
 ## Turn 4: GUI would not start (no tkinter, no sudo)
 

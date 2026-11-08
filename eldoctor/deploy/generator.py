@@ -82,8 +82,8 @@ def tuned_config(target: str, mode: str, profile: Dict[str, Any]) -> Dict[str, A
                                                                                           "169.254.169.253"]))
     chans += [
         {"type": "email", "enabled": False, "smtp_host": "smtp.example.com", "smtp_port": 587, "starttls": True,
-         "username": profile.get("email", "alerts@example.com"), "password_env": "ELDOCTOR_SMTP_PASSWORD",
-         "from": profile.get("email", "alerts@example.com"), "to": [profile.get("email", "soc@example.com")],
+         "username": profile.get("email", "alerts@example.invalid"), "password_env": "ELDOCTOR_SMTP_PASSWORD",
+         "from": profile.get("email", "alerts@example.invalid"), "to": [profile.get("email", "soc@example.invalid")],
          "min_severity": "high"},
         {"type": "slack", "enabled": False, "url_env": "ELDOCTOR_SLACK_WEBHOOK"},
         {"type": "teams", "enabled": False, "url_env": "ELDOCTOR_TEAMS_WEBHOOK"},
@@ -582,7 +582,7 @@ def generate(target: str, out_dir: Path, profile: Optional[Dict[str, Any]] = Non
         raise ValueError(f"target must be one of {TARGETS}")
     profile = dict(profile or {})
     profile.setdefault("username", "admin")
-    profile.setdefault("email", "admin@example.com")
+    profile.setdefault("email", "admin@example.invalid")
     profile.setdefault("full_name", "")
     profile.setdefault("organization", "")
     profile.setdefault("use_case", "cloud" if target in SERVER_TARGETS else "personal")

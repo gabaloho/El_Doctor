@@ -24,27 +24,27 @@ def test_password_hashing():
 def test_registration_rules_and_roles(store, cfg):
     um = UserManager(store, cfg)
     with pytest.raises(AuthError):
-        um.register("al", PW, "a@x.io")                          # username too short
+        um.register("al", PW, "a@example.invalid")                          # username too short
     with pytest.raises(AuthError):
-        um.register("alice", "password123", "a@x.io")            # weak
+        um.register("admin_user", "password123", "a@example.invalid")            # weak
     with pytest.raises(AuthError):
-        um.register("alice", PW, "not-an-email")
+        um.register("admin_user", PW, "not-an-email")
     with pytest.raises(AuthError):
-        um.register("alice", PW, "a@x.io", use_case="mining")
-    admin, key = um.register("alice", PW, "a@x.io", use_case="soc", deployment_target="kubernetes")
+        um.register("admin_user", PW, "a@example.invalid", use_case="mining")
+    admin, key = um.register("admin_user", PW, "a@example.invalid", use_case="soc", deployment_target="kubernetes")
     assert admin.role == "admin" and key.startswith("edk_")
-    bob, _ = um.register("bob", "B0b!Passw0rd", "b@x.io", role="admin")      # self-registration: role ignored
-    assert bob.role == "viewer" and not bob.can("run")
-    carol, _ = um.register("carol", "C4rol!Passw0rd", "c@x.io", role="analyst", created_by=admin)
-    assert carol.role == "analyst" and carol.can("approve") and not carol.can("enforce")
+    user_two, _ = um.register("user_two", "B0b!Passw0rd", "b@example.invalid", role="admin")      # self-registration: role ignored
+    assert user_two.role == "viewer" and not user_two.can("run")
+    analyst_user, _ = um.register("analyst_user", "C4rol!Passw0rd", "c@example.invalid", role="analyst", created_by=admin)
+    assert analyst_user.role == "analyst" and analyst_user.can("approve") and not analyst_user.can("enforce")
     with pytest.raises(AuthError):
-        um.register("carol", "C4rol!Passw0rd", "c@x.io")
+        um.register("analyst_user", "C4rol!Passw0rd", "c@example.invalid")
     with pytest.raises(AuthError):
-        um.set_role(bob, "carol", "admin")                       # viewer cannot manage users
+        um.set_role(user_two, "analyst_user", "admin")                       # viewer cannot manage users
     with pytest.raises(AuthError):
-        um.set_role(admin, "alice", "viewer")                    # last admin cannot demote itself
-    assert um.user_for_api_key(key).username == "alice"
-    row = store.query("SELECT password_hash, api_key_hash FROM users WHERE username='alice'")[0]
+        um.set_role(admin, "admin_user", "viewer")                    # last admin cannot demote itself
+    assert um.user_for_api_key(key).username == "admin_user"
+    row = store.query("SELECT password_hash, api_key_hash FROM users WHERE username='admin_user'")[0]
     assert PW not in row["password_hash"] and key not in row["api_key_hash"]
 
 
@@ -56,19 +56,19 @@ def test_login_lockout_and_sessions(store, cfg):
     from eldoctor.api.transport import InProcessTransport
     cfg["registration"]["lockout_attempts"] = 3
     um = UserManager(store, cfg)
-    um.register("alice", PW, "a@x.io")
+    um.register("admin_user", PW, "a@example.invalid")
     for _ in range(3):
         with pytest.raises(AuthError):
-            um.authenticate("alice", "Wrong!Passw0rd")
+            um.authenticate("admin_user", "Wrong!Passw0rd")
     with pytest.raises(AuthError, match="locked"):
-        um.authenticate("alice", PW)
+        um.authenticate("admin_user", PW)
     store.execute("UPDATE users SET locked_until = 0")
     svc = AgentService(cfg, store=store)
     c = ApiClient(InProcessTransport(svc.handle, own_identity(), "test-endpoint"))
     assert c.whoami() is None
-    res = c.login("alice", PW)
-    assert res["token"].count(".") == 2 and c.whoami()["username"] == "alice"
-    assert ApiClient(InProcessTransport(svc.handle, own_identity(), "test-endpoint")).whoami()["username"] == "alice"
+    res = c.login("admin_user", PW)
+    assert res["token"].count(".") == 2 and c.whoami()["username"] == "admin_user"
+    assert ApiClient(InProcessTransport(svc.handle, own_identity(), "test-endpoint")).whoami()["username"] == "admin_user"
     c.logout()                                                   # jti denylisted by the agent
     assert c.whoami() is None
     with pytest.raises(ApiError) as e:
@@ -81,16 +81,16 @@ def test_registration_share_is_opt_in(store, cfg, monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=5: sent.append(req) or open(os.devnull))
     cfg["registration"]["webhook_url"] = "http://collector.example/register"
     um = UserManager(store, cfg)
-    um.register("alice", PW, "a@x.io", consent_share=False)
+    um.register("admin_user", PW, "a@example.invalid", consent_share=False)
     assert sent == []
-    um.register("bobby", "B0b!Passw0rd", "b@x.io", consent_share=True)
+    um.register("bobby", "B0b!Passw0rd", "b@example.invalid", consent_share=True)
     body = json.loads(sent[0].data)
     assert body["username"] == "bobby" and "password" not in json.dumps(body).lower()
 
 
 @pytest.mark.parametrize("target", TARGETS)
 def test_deploy_bundles(tmp_path, target):
-    files = generate(target, tmp_path / target, {"username": "alice", "email": "a@x.io", "use_case": "soc"})
+    files = generate(target, tmp_path / target, {"username": "admin_user", "email": "a@example.invalid", "use_case": "soc"})
     names = {f.name for f in files}
     assert "README-DEPLOY.md" in names
     for f in files:
@@ -128,14 +128,14 @@ def run_cli(*args, env_extra=None):
 def test_cli_requires_registration_then_login(tmp_path):
     r = run_cli("alerts")
     assert r.returncode == 2 and "registration" in r.stderr
-    r = run_cli("register", "--non-interactive", "--username", "alice", "--email", "a@x.io", "--password-env", "P",
+    r = run_cli("register", "--non-interactive", "--username", "admin_user", "--email", "a@example.invalid", "--password-env", "P",
                 "--use-case", "soc", "--deploy-target", "docker", "--json", env_extra={"P": PW})
     assert r.returncode == 0, r.stderr
     key = json.loads(r.stdout)["api_key"]
     r = run_cli("alerts")
     assert r.returncode == 2 and "log" in r.stderr.lower()
     assert run_cli("--api-key", key, "whoami").returncode == 0
-    assert run_cli("login", "--username", "alice", "--password-env", "P", env_extra={"P": PW}).returncode == 0
+    assert run_cli("login", "--username", "admin_user", "--password-env", "P", env_extra={"P": PW}).returncode == 0
     r = run_cli("whoami")
     assert "role=admin" in r.stdout and "deploy_target=docker" in r.stdout
     r = run_cli("deploy", "--target", "kubernetes", "--out", str(tmp_path / "k8s-out"))
@@ -145,7 +145,7 @@ def test_cli_requires_registration_then_login(tmp_path):
 
 
 def test_cli_service_bootstrap(tmp_path):
-    env = {"ELDOCTOR_ADMIN_USER": "owner", "ELDOCTOR_ADMIN_EMAIL": "o@x.io", "ELDOCTOR_ADMIN_USE_CASE": "cloud",
+    env = {"ELDOCTOR_ADMIN_USER": "owner", "ELDOCTOR_ADMIN_EMAIL": "o@example.invalid", "ELDOCTOR_ADMIN_USE_CASE": "cloud",
            "ELDOCTOR_ADMIN_DEPLOY_TARGET": "aws"}
     r = run_cli("service", "--bootstrap", "--duration", "2", "--mode", "monitor", env_extra=env)
     assert r.returncode == 0, r.stderr
