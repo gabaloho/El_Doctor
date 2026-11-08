@@ -1,5 +1,0 @@
-# Tools used to build and check releases (not needed to run El Doctor).
-pyinstaller==6.22.3
-build==1.6.1
-cyclonedx-bom==7.5.0
-pytest==9.2.0
