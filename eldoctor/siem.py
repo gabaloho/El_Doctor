@@ -35,10 +35,12 @@ from eldoctor import __version__
 from eldoctor.config import home_dir, safe_url
 from eldoctor.integrity import GENESIS, audit_hash, fingerprint, verify_signature
 
-CRITICAL_EVENTS = {"integrity_violation", "audit_chain_broken"}
+CRITICAL_EVENTS = {"integrity_violation", "audit_chain_broken", "data_wipe_reported"}
 HIGH_EVENTS = {"api_denied", "token_peer_mismatch", "login_failed", "approval_decided", "role_changed",
                "user_disabled", "user_enabled", "user_registered", "mode_changed", "quarantine_restore",
-               "unblock_ip", "service_key_rotated", "sessions_revoked", "approval_executed", "response_action"}
+               "unblock_ip", "service_key_rotated", "sessions_revoked", "approval_executed", "response_action",
+               "offline_changes_found", "monitoring_gap", "system_restarted", "admin_report_failed",
+               "user_privilege_use", "user_remote_login", "activity_exported"}
 
 
 def event_severity(event: str) -> int:

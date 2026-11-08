@@ -1006,6 +1006,117 @@ def _config_get(svc: AgentService, p, user: User, peer: Peer):
     return _redact(svc.cfg)
 
 
+# ---------------------------------------------------------------------------------------- user activity (forensics)
+ACTIVITY_CATEGORIES = {"session", "process", "file", "system", "incident"}
+
+
+def _activity_filters(p: Dict[str, Any]) -> Dict[str, Any]:
+    def num(key: str) -> float:
+        v = p.get(key)
+        if v in (None, ""):
+            return 0.0
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            raise ApiFault("bad_request", f"{key} must be a number (epoch seconds)") from None
+    cat = _str(p, "category", False, 64)
+    if cat and not set(cat.split(",")) <= ACTIVITY_CATEGORIES:
+        raise ApiFault("bad_request", f"category must be in {sorted(ACTIVITY_CATEGORIES)}")
+    return {"since": num("since"), "until": num("until"), "user": _str(p, "user", False, 128),
+            "kind": _str(p, "kind", False, 256), "category": cat, "path": _str(p, "path", False, 4096),
+            "text": _str(p, "q", False, 512), "pid": _int(p.get("pid"), 0, 0, 2 ** 31),
+            "before_id": _int(p.get("before_id"), 0, 0, 2 ** 62), "after_id": _int(p.get("after_id"), 0, 0, 2 ** 62)}
+
+
+@api("activity.list", "forensics")
+def _activity_list(svc: AgentService, p, user: User, peer: Peer):
+    """Timeline of sessions, applications, file activity, boots and incidents (newest first, or oldest first with
+    order=asc - used for paging exports with after_id)."""
+    f = _activity_filters(p)
+    rows = svc.store.list_activity(limit=_int(p.get("limit"), 200, 1, 5000), ascending=p.get("order") == "asc", **f)
+    if p.get("export") and not f["after_id"]:
+        svc.store.audit(user.username, "activity_exported", {"filters": {k: v for k, v in f.items() if v},
+                                                             "format": _str(p, "format", False, 16)})
+    return rows
+
+
+def _running_apps(all_accounts: bool = False) -> List[Dict[str, Any]]:
+    from eldoctor.activity.sessions import is_human
+    from eldoctor.collectors.processes import ProcessCollector
+    procs, _ = ProcessCollector(hash_executables=False).snapshot()
+    out = []
+    for x in procs:
+        if not (all_accounts or is_human(x.username)) or (x.ppid == 2 and not x.exe):
+            continue
+        try:
+            term = psutil.Process(x.pid).terminal() or ""
+        except (psutil.Error, OSError, AttributeError):
+            term = ""
+        out.append({"pid": x.pid, "ppid": x.ppid, "name": x.name, "exe": x.exe, "cmdline": x.cmdline_str[:500],
+                    "user": x.username, "started": x.create_time, "terminal": term, "parent": x.parent_name,
+                    "memory_percent": round(x.memory_percent, 2)})
+    return sorted(out, key=lambda r: r["started"])
+
+
+@api("activity.now", "forensics")
+def _activity_now(svc: AgentService, p, user: User, peer: Peer):
+    """Who is logged in right now and which applications each person is running."""
+    from eldoctor.activity.sessions import read_sessions
+    mon = getattr(svc.agent, "activity", None)
+    sessions = mon.current_sessions() if mon is not None and mon.started else read_sessions()
+    apps = _running_apps(bool(p.get("all")))
+    users: Dict[str, Dict[str, Any]] = {}
+    for s in sessions:
+        users.setdefault(s["user"], {"user": s["user"], "sessions": [], "apps": []})["sessions"].append(s)
+    for a in apps:
+        users.setdefault(a["user"], {"user": a["user"], "sessions": [], "apps": []})["apps"].append(a)
+    return {"host": HOSTNAME, "time": time.time(), "boot_time": psutil.boot_time(), "sessions": sessions,
+            "logged_in": sorted({s["user"] for s in sessions}),
+            "users": sorted(users.values(), key=lambda u: (not u["sessions"], u["user"]))}
+
+
+@api("activity.sessions", "forensics")
+def _activity_sessions(svc: AgentService, p, user: User, peer: Peer):
+    from eldoctor.activity.sessions import read_sessions
+    mon = getattr(svc.agent, "activity", None)
+    current = mon.current_sessions() if mon is not None and mon.started else read_sessions()
+    hist = svc.store.list_activity(limit=_int(p.get("limit"), 100, 1, 5000), category="session",
+                                   user=_str(p, "user", False, 128))
+    return {"current": current, "history": hist}
+
+
+@api("activity.status", "forensics")
+def _activity_status(svc: AgentService, p, user: User, peer: Peer):
+    mon = getattr(svc.agent, "activity", None)
+    if mon is not None and mon.started:
+        st = mon.status()
+    else:
+        st = {"enabled": bool((svc.cfg.get("activity") or {}).get("enabled", True)), "started": False,
+              "note": "the detection loop (which records activity) is not running in this process",
+              "index": svc.store.file_index_stats()}
+    st["state"] = svc.store.meta_get("activity_state") or {}
+    st["state"].pop("sessions", None)
+    counts = {r["status"]: r["n"] for r in svc.store.query("SELECT status, COUNT(*) AS n FROM outbox GROUP BY status")}
+    st["outbox"] = counts
+    st["total_records"] = svc.store.query("SELECT COUNT(*) AS n FROM activity")[0]["n"]
+    return st
+
+
+@api("activity.reports", "forensics")
+def _activity_reports(svc: AgentService, p, user: User, peer: Peer):
+    return svc.store.outbox_list(_int(p.get("limit"), 50, 1, 1000))
+
+
+@api("activity.reports_retry", "notify_test")
+def _activity_reports_retry(svc: AgentService, p, user: User, peer: Peer):
+    from eldoctor.activity.report import AdminReporter
+    mon = getattr(svc.agent, "activity", None)
+    rep = mon.reporter if mon is not None else AdminReporter(svc.cfg, svc.store)
+    res = rep.deliver(force=True)
+    svc.store.audit(user.username, "admin_reports_retried", {"results": res})
+    return {"results": res, "smtp_configured": rep.smtp() is not None, "recipients": len(rep.recipients())}
+
+
 # ---------------------------------------------------------------------------------------- audit (admin)
 @api("audit.list", "audit")
 def _audit_list(svc: AgentService, p, user: User, peer: Peer):

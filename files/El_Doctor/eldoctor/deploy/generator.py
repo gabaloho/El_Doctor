@@ -35,6 +35,22 @@ SERVER_TARGETS = {"linux", "docker", "kubernetes", "aws", "azure", "gcp"}
 SRC_ZIP = f"eldoctor-{__version__}-src.zip"
 
 
+def bundled_binaries(target: str) -> List[Path]:
+    """When this El Doctor is a standalone executable for the target's OS, the bundle ships it (no Python needed
+    on the host): eldoctor / eldoctor.exe, plus the windowed "El Doctor.exe" next to it on Windows."""
+    import sys
+    from eldoctor._bootstrap import is_frozen
+    if not is_frozen():
+        return []
+    own = Path(sys.executable)
+    if target == "linux" and sys.platform.startswith("linux"):
+        return [own]
+    if target == "windows" and sys.platform.startswith("win"):
+        gui = own.with_name("El Doctor.exe")
+        return [own] + ([gui] if gui.exists() and gui != own else [])
+    return []
+
+
 def default_mode(target: str) -> str:
     return "interactive" if target == "windows" else "enforce"
 
@@ -142,7 +158,7 @@ RuntimeDirectoryMode=0755
 # Data folder (DB, keys, evidence, quarantine): root only - re-checked and repaired at every start
 StateDirectory=eldoctor
 StateDirectoryMode=0700
-ExecStart=/opt/eldoctor/venv/bin/eldoctor --config /etc/eldoctor/config.yaml service --bootstrap
+ExecStart=/opt/eldoctor/bin/eldoctor --config /etc/eldoctor/config.yaml service --bootstrap
 Restart=on-failure
 RestartSec=5
 # Response actions need: kill/suspend (CAP_KILL), read other processes (CAP_SYS_PTRACE, CAP_DAC_READ_SEARCH),
@@ -169,21 +185,31 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 [[ $EUID -eq 0 ]] || {{ echo "run as root (sudo $0)"; exit 1; }}
 
-if ! command -v python3 >/dev/null; then
-  if command -v apt-get >/dev/null; then apt-get update -y && apt-get install -y python3 python3-venv python3-pip
-  elif command -v dnf >/dev/null; then dnf install -y python3 python3-pip
-  elif command -v yum >/dev/null; then yum install -y python3 python3-pip
-  else echo "install python3 (>=3.9) first"; exit 1; fi
-fi
-python3 -m venv --help >/dev/null 2>&1 || {{ command -v apt-get >/dev/null && apt-get install -y python3-venv; }}
+UPGRADE=0
+[[ -f /var/lib/eldoctor/eldoctor.db ]] && UPGRADE=1          # keep users, keys and records: never re-register
+systemctl stop eldoctor.service 2>/dev/null || true
 
-install -d -m 0755 /opt/eldoctor
+install -d -m 0755 /opt/eldoctor /opt/eldoctor/bin
 install -d -m 0700 /etc/eldoctor /var/lib/eldoctor
-python3 -m venv /opt/eldoctor/venv
-/opt/eldoctor/venv/bin/pip install --upgrade pip >/dev/null
-PKG="${{ELDOCTOR_PACKAGE:-$HERE/{src_zip}}}"
-/opt/eldoctor/venv/bin/pip install "$PKG"
-ln -sf /opt/eldoctor/venv/bin/eldoctor /usr/local/bin/eldoctor
+if [[ -x "$HERE/eldoctor" && -z "${{ELDOCTOR_PACKAGE:-}}" ]]; then
+  # standalone build (release download): nothing else to install, no Python needed
+  install -m 0755 "$HERE/eldoctor" /opt/eldoctor/bin/eldoctor
+  rm -rf /opt/eldoctor/venv
+else
+  if ! command -v python3 >/dev/null; then
+    if command -v apt-get >/dev/null; then apt-get update -y && apt-get install -y python3 python3-venv python3-pip
+    elif command -v dnf >/dev/null; then dnf install -y python3 python3-pip
+    elif command -v yum >/dev/null; then yum install -y python3 python3-pip
+    else echo "install python3 (>=3.9) first"; exit 1; fi
+  fi
+  python3 -m venv --help >/dev/null 2>&1 || {{ command -v apt-get >/dev/null && apt-get install -y python3-venv; }}
+  python3 -m venv /opt/eldoctor/venv
+  /opt/eldoctor/venv/bin/pip install --upgrade pip >/dev/null
+  PKG="${{ELDOCTOR_PACKAGE:-$HERE/{src_zip}}}"
+  /opt/eldoctor/venv/bin/pip install --upgrade "$PKG"
+  ln -sf /opt/eldoctor/venv/bin/eldoctor /opt/eldoctor/bin/eldoctor
+fi
+ln -sf /opt/eldoctor/bin/eldoctor /usr/local/bin/eldoctor
 
 [[ -f /etc/eldoctor/config.yaml ]] || install -m 0600 "$HERE/config.yaml" /etc/eldoctor/config.yaml
 [[ -f /etc/eldoctor/eldoctor.env ]] || install -m 0600 "$HERE/eldoctor.env.example" /etc/eldoctor/eldoctor.env
@@ -202,7 +228,9 @@ fi
 install -m 0644 "$HERE/eldoctor.service" /etc/systemd/system/eldoctor.service
 
 export ELDOCTOR_HOME=/var/lib/eldoctor
-if [[ -t 0 && "${{ELDOCTOR_UNATTENDED:-0}}" != "1" ]]; then
+if [[ "$UPGRADE" == "1" ]]; then
+  echo "Existing installation found in /var/lib/eldoctor: upgraded in place (users, keys and records kept)."
+elif [[ -t 0 && "${{ELDOCTOR_UNATTENDED:-0}}" != "1" ]]; then
   echo "== Registration is required before El Doctor can run =="
   eldoctor --config /etc/eldoctor/config.yaml register || true
   echo "== Log in to create the service identity =="
@@ -210,8 +238,10 @@ if [[ -t 0 && "${{ELDOCTOR_UNATTENDED:-0}}" != "1" ]]; then
 fi
 
 systemctl daemon-reload
-systemctl enable --now eldoctor.service
+systemctl enable eldoctor.service
+systemctl restart eldoctor.service
 systemctl --no-pager status eldoctor.service | head -5 || true
+/opt/eldoctor/bin/eldoctor --version
 echo "Installed. Logs: journalctl -u eldoctor -f   Alerts: /var/lib/eldoctor/alerts.jsonl"
 echo "Console (any user, no sudo - talks to the service over /run/eldoctor/api.sock): eldoctor login && eldoctor tui"
 echo "Audit trail: eldoctor audit verify  (admins; configure audit.forward in /etc/eldoctor/config.yaml for your SIEM)"
@@ -236,7 +266,7 @@ LINUX_UNINSTALL = """#!/usr/bin/env bash
 set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "run as root"; exit 1; }
 systemctl disable --now eldoctor.service 2>/dev/null || true
-rm -f /etc/systemd/system/eldoctor.service /usr/local/bin/eldoctor
+rm -f /etc/systemd/system/eldoctor.service /usr/local/bin/eldoctor /etc/sysctl.d/60-eldoctor-inotify.conf
 systemctl daemon-reload
 rm -rf /opt/eldoctor
 echo "Removed binaries. Data kept in /var/lib/eldoctor and config in /etc/eldoctor (delete manually)."
@@ -258,16 +288,34 @@ param(
   [string]$DataDir = "$env:ProgramData\ElDoctor"
 )
 $ErrorActionPreference = "Stop"
-$py = Get-Command py -ErrorAction SilentlyContinue
-$pyArgs = @("-3")
-if (-not $py) {{ $py = Get-Command python -ErrorAction SilentlyContinue; $pyArgs = @() }}
-if (-not $py) {{ throw "Python 3.9+ is required. Install it with: winget install Python.Python.3.12" }}
-
+$Upgrade = Test-Path "$DataDir\eldoctor.db"           # keep users, keys and records: never re-register
+# the running agent keeps its program files open: stop it before replacing them
+Stop-ScheduledTask -TaskName "ElDoctor Agent" -ErrorAction SilentlyContinue
+Get-Process eldoctor, "El Doctor" -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like "$InstallDir\*" }} | Stop-Process -Force
 New-Item -ItemType Directory -Force -Path $InstallDir, $DataDir | Out-Null
-& $py.Source @pyArgs -m venv "$InstallDir\venv"
-$vpy = "$InstallDir\venv\Scripts\python.exe"
-& $vpy -m pip install --upgrade pip | Out-Null
-& $vpy -m pip install "$PSScriptRoot\{src_zip}" windows-curses
+
+if (Test-Path "$PSScriptRoot\eldoctor.exe") {{
+  # standalone build (release download): nothing else to install, no Python needed
+  New-Item -ItemType Directory -Force -Path "$InstallDir\bin" | Out-Null
+  Copy-Item "$PSScriptRoot\eldoctor.exe" "$InstallDir\bin\eldoctor.exe" -Force
+  $exe = "$InstallDir\bin\eldoctor.exe"
+  $gui = $exe
+  if (Test-Path "$PSScriptRoot\El Doctor.exe") {{
+    Copy-Item "$PSScriptRoot\El Doctor.exe" "$InstallDir\bin\El Doctor.exe" -Force
+    $gui = "$InstallDir\bin\El Doctor.exe"
+  }}
+}} else {{
+  $py = Get-Command py -ErrorAction SilentlyContinue
+  $pyArgs = @("-3")
+  if (-not $py) {{ $py = Get-Command python -ErrorAction SilentlyContinue; $pyArgs = @() }}
+  if (-not $py) {{ throw "Python 3.9+ is required. Install it with: winget install Python.Python.3.12" }}
+  & $py.Source @pyArgs -m venv "$InstallDir\venv"
+  $vpy = "$InstallDir\venv\Scripts\python.exe"
+  & $vpy -m pip install --upgrade pip | Out-Null
+  & $vpy -m pip install --upgrade "$PSScriptRoot\{src_zip}" windows-curses
+  $exe = "$InstallDir\venv\Scripts\eldoctor.exe"
+  $gui = "$InstallDir\venv\Scripts\eldoctor-gui.exe"
+}}
 if (-not (Test-Path "$DataDir\config.yaml")) {{ Copy-Item "$PSScriptRoot\config.yaml" "$DataDir\config.yaml" }}
 
 # Data directory: SYSTEM + Administrators during installation (registration below). The service then locks it
@@ -275,16 +323,19 @@ if (-not (Test-Path "$DataDir\config.yaml")) {{ Copy-Item "$PSScriptRoot\config.
 icacls $DataDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
 [Environment]::SetEnvironmentVariable("ELDOCTOR_HOME", $DataDir, "Machine")
 $env:ELDOCTOR_HOME = $DataDir
-$exe = "$InstallDir\venv\Scripts\eldoctor.exe"
 $cfg = "$DataDir\config.yaml"
 
-Write-Host "== Registration is required before El Doctor can run ==" -ForegroundColor Cyan
-& $exe --config $cfg register
-Write-Host "== Log in ==" -ForegroundColor Cyan
-& $exe --config $cfg login
+if ($Upgrade) {{
+  Write-Host "Existing installation found in $DataDir : upgraded in place (users, keys and records kept)." -ForegroundColor Green
+}} else {{
+  Write-Host "== Registration is required before El Doctor can run ==" -ForegroundColor Cyan
+  & $exe --config $cfg register
+  Write-Host "== Log in ==" -ForegroundColor Cyan
+  & $exe --config $cfg login
+}}
 
 if ($Mode -in @("Service", "Both")) {{
-  & $exe --config $cfg service-key
+  if (-not $Upgrade) {{ & $exe --config $cfg service-key }}
   $action = New-ScheduledTaskAction -Execute $exe -Argument "--config `"$cfg`" service"
   $trigger = New-ScheduledTaskTrigger -AtStartup
   $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
@@ -301,12 +352,12 @@ if ($Mode -in @("Desktop", "Both")) {{
   # service (SYSTEM) performs kill/suspend/quarantine after checking the user's role. Desktop-only installs
   # host the agent inside the GUI, so those shortcuts are flagged "Run as administrator".
   $elevate = ($Mode -eq "Desktop")
-  $gui = "$InstallDir\venv\Scripts\eldoctor-gui.exe"
+  $guiArgs = if ($gui -eq $exe) {{ "--config `"$cfg`" gui" }} else {{ "--config `"$cfg`"" }}
   $ws = New-Object -ComObject WScript.Shell
   foreach ($dir in @([Environment]::GetFolderPath("CommonDesktopDirectory"), "$env:ProgramData\Microsoft\Windows\Start Menu\Programs")) {{
     $lnk = $ws.CreateShortcut("$dir\El Doctor.lnk")
     $lnk.TargetPath = $gui
-    $lnk.Arguments = "--config `"$cfg`""
+    $lnk.Arguments = $guiArgs
     $lnk.WorkingDirectory = $DataDir
     $lnk.Description = "El Doctor security console (GUI)"
     $lnk.Save()
@@ -329,7 +380,7 @@ Write-Host "Alerts: $DataDir\alerts.jsonl   Evidence: $DataDir\evidence   Quaran
 WIN_UNINSTALL = r"""#Requires -RunAsAdministrator
 param([string]$InstallDir = "$env:ProgramFiles\ElDoctor")
 Unregister-ScheduledTask -TaskName "ElDoctor Agent" -Confirm:$false -ErrorAction SilentlyContinue
-Get-Process eldoctor -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process eldoctor, "El Doctor" -ErrorAction SilentlyContinue | Stop-Process -Force
 foreach ($dir in @([Environment]::GetFolderPath("CommonDesktopDirectory"), "$env:ProgramData\Microsoft\Windows\Start Menu\Programs")) {
   Remove-Item "$dir\El Doctor.lnk", "$dir\El Doctor (terminal).lnk" -ErrorAction SilentlyContinue }
 Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
@@ -640,6 +691,13 @@ def generate(target: str, out_dir: Path, profile: Optional[Dict[str, Any]] = Non
         write("config.yaml", cfg_text)
     if target in ("windows", "linux", "docker"):
         files.append(build_source_zip(out))
+    for binary in bundled_binaries(target):            # standalone build: the installers use it, no Python needed
+        import shutil
+        dest = out / binary.name
+        if binary.resolve() != dest.resolve():
+            shutil.copy2(binary, dest)
+            os.chmod(dest, 0o755)
+        files.append(dest)
 
     if target == "linux":
         write("install.sh", LINUX_INSTALL.format(**fmt), executable=True)

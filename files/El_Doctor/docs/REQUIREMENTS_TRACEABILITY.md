@@ -123,3 +123,32 @@ not sealed", then tell a reviewer what to check for turns 7 and 8 (`docs/REVIEW_
 | R9.6 | Data wipe: record the user + every affected file/folder, e-mail the registered admins | `activity/wipe.py` (burst → incident, bounded memory), ED-ACT-001 / 002 / 003, `pb-data-destruction` (evidence + suspend, per mode), `activity/report.py` (recipients = verified admin accounts + extras; zipped CSV of every item; persistent outbox retried across restarts), Sigma wipe-tool rules (shred, dd/wipefs/mkfs on devices, rm -rf of homes, SDelete, cipher /w, format, rd /s /q) | `test_mass_deletion_alerts_and_emails_the_registered_admins` (real SMTP), `test_offline_wipe_raises_alert_and_report_persists_until_smtp_exists`, `test_agent_runs_the_data_destruction_playbook_on_the_wiper`, `test_wipe_tool_sigma_rules`, `test_deleting_el_doctors_evidence_is_an_incident` | Verified live |
 | R9.7 | Safe on hostile input; access control | FIFO / symlink-safe reads (`safe_open`), no-DTD XML, CSV-injection neutralised, header-safe subjects, `forensics` permission (analyst, admin), exports audited | `test_a_fifo_or_symlink_posing_as_a_download_cannot_stall_or_leak`, `test_report_attachment_and_subject_are_neutralised`, `test_activity_api_rbac_and_export_audit`, `test_cli_activity_export` | Verified live |
 | R9.8 | Deployment | Linux bundle: auditd deletion/rename rules for /home and /root, inotify watch limit; Windows bundle: Sysmon file-event guidance; README section 5b | `test_deploy_bundles` | Built, not executable here (root / Windows) |
+
+## Turn 11: an installer for people who are not developers
+
+> "A non-technical user cannot run our application: package it in an installer, a downloadable file they can
+> execute, as an alternative way of installation."
+
+| ID | Requirement | Implementation | Automated verification | Status |
+|---|---|---|---|---|
+| R11.1 | Windows: one downloadable file that installs El Doctor | `packaging/windows/eldoctor.iss` (setup wizard: all users / me only, shortcuts, optional round-the-clock protection + administrator page, upgrade, uninstall, silent mode), built by `packaging/build_release.py` | `test_setup_wizard_script_is_consistent` (static); release workflow: silent per-user install/uninstall + all-users install with the service, login to it, uninstall | Built, not executable here (Windows) |
+| R11.2 | Whole-computer protection without a terminal | `eldoctor/installer.py` + `eldoctor install-service / uninstall-service [--purge | --stop-only]`; clean stop (`agent.shutdown`); Windows registry marker so reinstalls find kept records; GUI waits for a starting service | `test_windows_install_registers_the_admin_then_upgrades_in_place`, `test_windows_uninstall_keeps_records_and_a_reinstall_finds_them`, `test_linux_install_and_remove`, `test_agent_shutdown_only_for_the_agents_account`, `test_installer_stops_a_running_agent_cleanly` | Verified (Linux live; Windows logic with recorded OS calls) |
+| R11.3 | Mac and Linux installers | `El Doctor.app` + `.dmg` (spec BUNDLE, `hdiutil`), `packaging/linux_packages.py` (.deb in pure Python, .rpm via rpmbuild), menu entry, icons | `test_deb_package_is_accepted_by_dpkg`, `test_desktop_entry_and_icons`, `test_spec_builds_icons_and_the_mac_app`; dpkg install/upgrade/remove/purge in an alternate root; release workflow: .rpm installed in AlmaLinux, .deb via apt + systemd on Ubuntu, .dmg verified on macOS | .deb verified live; .rpm / .dmg built in CI |
+| R11.4 | The developer / portable ways keep working | archives, wheel, `install.sh` / `install.ps1` unchanged in behaviour | full test suite, release smoke test | Verified live |
+
+## Turn 12: what is critical for security operations - the fleet console
+
+> "Which other issue is critical to make this application more powerful for security operations? Proceed with it."
+
+Finding: every agent was an island (no fleet view, no shared alert queue, no coordinated response, and a killed or
+wiped agent went unnoticed). Implemented: El Doctor Hub.
+
+| ID | Requirement | Implementation | Automated verification | Status |
+|---|---|---|---|---|
+| R12.1 | Secure enrollment and transport | `fleet/pki.py` (private CA, EKU-restricted certificates, token with CA fingerprint), `fleet/link.py::enroll`, mutual TLS in `fleet/hub.py` | `test_certificates_and_tokens`, `test_a_forged_hub_is_refused_before_the_secret_is_sent`, `test_mutual_tls_and_revocation` | Verified live (localhost TLS) |
+| R12.2 | Fleet view + alert queue + triage | `Hub.checkin / agents / alerts / triage`, console pages, `eldoctor hub agents / alerts / triage` | `test_enroll_report_respond_and_distribute_intel`, `test_triage_rules_and_audit`, `test_cli_hub_and_agent_processes` | Verified live |
+| R12.3 | Remote response, bounded by the endpoint | `Hub.create_command`, `HubLink.execute` (allow-list, safety guards, at most once, audited both sides) | kill of a real process, replay executed once, refused actions, enforce refused | Verified live |
+| R12.4 | Fleet threat intel | `Hub.add_intel / intel_snapshot`, `HubLink._apply_intel` (+ fix: intel/*.csv reloaded at start) | intel applied and withdrawn; `test_analyst_added_indicators_survive_a_restart` | Verified live |
+| R12.5 | Silent / tampered agents | `Hub.sweep` (HUB-001/002), `_check_audit_head` (HUB-003), revoked (HUB-004), notifications | `test_silent_agent_is_an_alert_and_its_return_too`, `test_audit_trail_rollback_on_an_endpoint_is_detected` | Verified live |
+| R12.6 | Analyst web console, safe | `fleet/console.py` | `test_web_console_security` (XSS, CSRF, roles, cookies, CSP) | Verified live |
+| R12.7 | Deployable hub | `eldoctor hub install-service` (unprivileged account, hardened unit), release smoke test runs a hub | `test_hub_service_install_is_hardened_and_unprivileged`, build_release smoke test | Unit verified; the systemd service itself not run here (no root) |

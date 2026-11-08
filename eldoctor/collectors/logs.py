@@ -132,6 +132,25 @@ RE_AUDIT = re.compile(r"type=(?P<type>\w+) msg=audit\((?P<ts>[\d.]+):(?P<serial>
 RE_KV = re.compile(r'([\w\[\]]+)=("(?:[^"\\]|\\.)*"|\S+)')
 RE_HEX = re.compile(r"^[0-9A-Fa-f]+$")
 EXEC_SYSCALLS = {"59", "322", "11", "358"}   # execve/execveat on x86_64, execve/execveat on i386
+# file syscalls by audit arch (the ENRICHED log format also carries SYSCALL=<name>, used when present)
+FILE_SYSCALLS = {
+    "c000003e": {2: "open", 257: "openat", 85: "creat", 76: "truncate", 77: "ftruncate", 437: "openat2",
+                 87: "unlink", 263: "unlinkat", 84: "rmdir", 82: "rename", 264: "renameat", 316: "renameat2",
+                 83: "mkdir", 258: "mkdirat", 90: "chmod", 91: "fchmod", 268: "fchmodat", 452: "fchmodat2",
+                 92: "chown", 93: "fchown", 94: "lchown", 260: "fchownat", 86: "link", 265: "linkat", 88: "symlink",
+                 266: "symlinkat", 188: "setxattr", 189: "lsetxattr", 190: "fsetxattr", 197: "removexattr",
+                 198: "lremovexattr", 199: "fremovexattr", 280: "utimensat", 235: "utimes", 132: "utime",
+                 261: "futimesat"},
+    "c00000b7": {56: "openat", 437: "openat2", 45: "truncate", 46: "ftruncate", 35: "unlinkat", 38: "renameat",
+                 276: "renameat2", 34: "mkdirat", 52: "fchmod", 53: "fchmodat", 452: "fchmodat2", 54: "fchownat",
+                 55: "fchown", 37: "linkat", 36: "symlinkat", 5: "setxattr", 6: "lsetxattr", 7: "fsetxattr",
+                 14: "removexattr", 15: "lremovexattr", 16: "fremovexattr", 88: "utimensat"},
+}
+OPEN_SYSCALLS = {"open", "openat", "openat2", "creat", "truncate", "ftruncate"}
+ATTR_SYSCALLS = {"chmod", "fchmod", "fchmodat", "fchmodat2", "chown", "fchown", "lchown", "fchownat", "setxattr",
+                 "lsetxattr", "fsetxattr", "removexattr", "lremovexattr", "fremovexattr", "utimensat", "utimes",
+                 "utime", "futimesat"}
+AUDIT_UNSET = {"4294967295", "-1", "unset", ""}
 
 
 def _audit_value(v: str) -> str:
@@ -154,17 +173,21 @@ def _uid_name(uid: str) -> str:
 
 
 class AuditParser:
-    """Turns Linux audit EXECVE/SYSCALL/CWD/PROCTITLE records into process_creation events.
+    """Turns Linux audit EXECVE/SYSCALL/CWD/PROCTITLE/PATH records into events.
 
-    Needs an audit rule such as (installed by the Linux deployment bundle):
-        -a always,exit -F arch=b64 -S execve -k eldoctor_exec
-    This sees *every* exec, including processes that live for milliseconds,
-    which /proc polling can miss.
+    * process_creation - needs an audit rule such as (installed by the Linux deployment bundle)
+          -a always,exit -F arch=b64 -S execve -k eldoctor_exec
+      This sees *every* exec, including processes that live for milliseconds, which /proc polling can miss.
+    * file_event (created / modified / deleted / renamed / attributes) - for records whose key starts with
+      ``eldoctor_file`` (bundle rule: ``-w /home -p wa -k eldoctor_file``).  The kernel names the process, the
+      user *and the login user* (auid: who originally logged in, even after sudo / su), so these are the
+      authoritative "who deleted / changed this file" records.
     """
 
-    def __init__(self, max_age: float = 2.0) -> None:
+    def __init__(self, max_age: float = 2.0, file_keys: tuple = ("eldoctor_file",)) -> None:
         self.buf: Dict[str, Dict[str, Any]] = {}
         self.max_age = max_age
+        self.file_keys = tuple(file_keys)
 
     def feed(self, line: str) -> List[Dict[str, Any]]:
         m = RE_AUDIT.search(line)
@@ -175,9 +198,12 @@ class AuditParser:
         if rtype == "EOE":
             ev = self._build(serial)
             return [ev] if ev else []
-        ent = self.buf.setdefault(serial, {"ts": float(m.group("ts")), "seen": time.time(), "rec": {}})
+        ent = self.buf.setdefault(serial, {"ts": float(m.group("ts")), "seen": time.time(), "rec": {}, "paths": []})
         kv = {k: v for k, v in RE_KV.findall(m.group("body"))}
-        ent["rec"].setdefault(rtype, {}).update(kv)
+        if rtype == "PATH":                      # one record per path item: keep them all (rename = 2+ names)
+            ent["paths"].append(kv)
+        else:
+            ent["rec"].setdefault(rtype, {}).update(kv)
         out.extend(self.flush(older_than=self.max_age, keep=serial))
         return out
 
@@ -196,6 +222,9 @@ class AuditParser:
             return None
         rec = ent["rec"]
         sc, ex = rec.get("SYSCALL", {}), rec.get("EXECVE")
+        key = _audit_value(sc.get("key", "")) if sc.get("key") else ""
+        if not ex and key.startswith(self.file_keys) and ent.get("paths"):
+            return self._file_event(ent)
         if not ex and sc.get("syscall") not in EXEC_SYSCALLS:
             return None
         if sc.get("success") == "no":
@@ -229,6 +258,87 @@ class AuditParser:
                 "host": "", "pid": pid, "fields": fields,
                 "process": {"pid": pid, "ppid": ppid, "name": name, "exe": exe, "cmdline": args,
                             "username": user, "cwd": cwd, "create_time": 0.0}}
+
+
+    @staticmethod
+    def _user(sc: Dict[str, str], raw: str, enriched: str) -> str:
+        if sc.get(enriched):
+            v = _audit_value(sc[enriched])
+            return "" if v in AUDIT_UNSET else v
+        v = sc.get(raw, "")
+        return "" if v in AUDIT_UNSET else _uid_name(v)
+
+    def _file_event(self, ent: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        rec = ent["rec"]
+        sc = rec.get("SYSCALL", {})
+        if sc.get("success") == "no":
+            return None
+        cwd = _audit_value(rec.get("CWD", {}).get("cwd", "")) if rec.get("CWD") else ""
+        items = sorted(ent["paths"], key=lambda kv: int(kv.get("item", "0") or 0))
+        parents = [_audit_value(i.get("name", "")) for i in items if i.get("nametype") == "PARENT"]
+        parents = [p for p in parents if p.startswith("/")]
+
+        def full(item: Dict[str, str], parent: str) -> str:
+            name = _audit_value(item.get("name", ""))
+            if not name or name == "(null)":
+                return ""
+            if name.startswith("/"):
+                return os.path.normpath(name)
+            base = parent or cwd
+            return os.path.normpath(os.path.join(base, name)) if base else name
+
+        dels = [i for i in items if i.get("nametype") == "DELETE"]
+        crts = [i for i in items if i.get("nametype") == "CREATE"]
+        norms = [i for i in items if i.get("nametype") == "NORMAL"]
+        sysname = _audit_value(sc.get("SYSCALL", "")) if sc.get("SYSCALL") else \
+            FILE_SYSCALLS.get(sc.get("arch", ""), {}).get(int(sc.get("syscall", "-1") or -1), "")
+        first_parent, last_parent = (parents[0] if parents else ""), (parents[-1] if parents else "")
+        target, is_dir = "", False
+        if dels and crts:
+            op, path, target = "renamed", full(dels[0], first_parent), full(crts[-1], last_parent)
+            is_dir = dels[0].get("mode", "").startswith("04")
+        elif dels:
+            op, path = "deleted", full(dels[0], first_parent)
+            is_dir = dels[0].get("mode", "").startswith("04") or sysname == "rmdir"
+        elif crts:
+            op, path = "created", full(crts[-1], last_parent)
+            is_dir = crts[-1].get("mode", "").startswith("04") or sysname in ("mkdir", "mkdirat")
+        elif norms:
+            path = full(norms[-1], first_parent)
+            if sysname in ATTR_SYSCALLS:
+                op = "attributes"
+            elif sysname in ("open", "openat", "openat2"):
+                flags_arg = "a1" if sysname == "open" else "a2"
+                try:
+                    flags = int(sc.get(flags_arg, "0"), 16)
+                except ValueError:
+                    flags = 1
+                op = "modified" if flags & 0x3 or flags & 0x200 else "opened"      # O_WRONLY/O_RDWR/O_TRUNC
+            else:
+                op = "modified"
+            is_dir = norms[-1].get("mode", "").startswith("04")
+        else:
+            return None
+        if not path:
+            return None
+        pid = int(sc.get("pid", "0") or 0)
+        user = self._user(sc, "uid", "UID")
+        login = self._user(sc, "auid", "AUID")
+        exe = _audit_value(sc.get("exe", "")) if sc.get("exe") else ""
+        comm = _audit_value(sc.get("comm", "")) if sc.get("comm") else exe.rsplit("/", 1)[-1]
+        title = _audit_value(rec["PROCTITLE"]["proctitle"]) if rec.get("PROCTITLE", {}).get("proctitle") else ""
+        fe = {"op": op, "path": path, "target": target, "is_dir": is_dir, "pid": pid,
+              "ppid": int(sc.get("ppid", "0") or 0), "exe": exe, "process": comm, "user": user, "login_user": login,
+              "syscall": sysname, "cmdline": title, "relative": not (dels or crts or norms)[0].get("name", "\"/").strip(
+                  '"').startswith("/") and not parents}
+        fields = {"TargetFilename": path, "Image": exe, "User": user, "ProcessId": pid, "auid": login,
+                  "key": _audit_value(sc.get("key", ""))}
+        if target:
+            fields["TargetFilenameNew"] = target
+        return {"kind": "log", "source": "auditd", "product": "linux", "service": "auditd", "category": "file_event",
+                "event_type": f"file_{op}", "ts": ent["ts"], "raw": f"{op} {path}",
+                "message": f"{op} {path}{' -> ' + target if target else ''} by {user or '?'} (login {login or '?'}) "
+                           f"{comm}[{pid}]", "program": comm, "host": "", "pid": pid, "fields": fields, "file": fe}
 
 
 class AuditdCollector:
@@ -348,8 +458,15 @@ EVT_NS = "{http://schemas.microsoft.com/win/2004/08/events/event}"
 WIN_EVENT_TYPES = {
     4625: "logon_failed", 4624: "logon_success", 4720: "user_created", 4732: "group_member_added",
     1102: "log_cleared", 104: "log_cleared", 7045: "service_installed", 4688: "process_creation",
-    4104: "powershell_scriptblock",
+    4104: "powershell_scriptblock", 4634: "logoff", 4647: "logoff",
 }
+SYSMON_FILE_OPS = {11: "created", 23: "deleted", 26: "deleted", 2: "attributes", 15: "downloaded"}
+
+
+def _win_file(op: str, path: str, user: str, pid: Any, image: str, target: str = "") -> Dict[str, Any]:
+    return {"op": op, "path": path, "target": target, "is_dir": False, "pid": _pid(pid), "ppid": 0, "exe": image,
+            "process": image.replace("/", "\\").rsplit("\\", 1)[-1], "user": user, "login_user": user,
+            "syscall": "", "cmdline": ""}
 
 
 def parse_windows_events_xml(xml_text: str, channel: str = "") -> List[Dict[str, Any]]:
@@ -388,6 +505,32 @@ def parse_windows_events_xml(xml_text: str, channel: str = "") -> List[Dict[str,
                                         fields.get("User", ""), fields.get("ParentProcessId"))
         elif is_sysmon and eid == 3:
             e["category"], e["event_type"] = "network_connection", "network_connection"
+        elif is_sysmon and eid in SYSMON_FILE_OPS and fields.get("TargetFilename"):
+            op, path = SYSMON_FILE_OPS[eid], fields["TargetFilename"]
+            if eid == 15:                  # FileCreateStreamHash: the Mark-of-the-Web stream of a download
+                if ":zone.identifier" not in path.lower():
+                    op = "created"
+                path = re.split(r":zone\.identifier", path, flags=re.I)[0]
+                m = re.search(r"HostUrl=(\S+)", fields.get("Contents") or "")
+                if m:
+                    fields["url"] = m.group(1)
+            e["category"], e["event_type"] = "file_event", f"file_{op}"
+            e["file"] = _win_file(op, path, fields.get("User", ""), fields.get("ProcessId"), fields.get("Image", ""))
+            if fields.get("url"):
+                e["file"]["url"] = fields["url"]
+            if eid in (23, 26):
+                e["file"]["archived"] = fields.get("Archived", "")
+        elif eid == 4663 and chan.lower() == "security" and (fields.get("ObjectType") or "File") == "File":
+            try:                           # object access auditing (SACL on the folder): who touched what
+                mask = int(str(fields.get("AccessMask") or "0"), 16)
+            except ValueError:
+                mask = 0
+            op = "deleted" if mask & 0x10000 else "modified" if mask & 0x6 else "opened" if mask & 0x1 else ""
+            if op:
+                dom, usr = fields.get("SubjectDomainName", ""), fields.get("SubjectUserName", "")
+                e["category"], e["event_type"] = "file_event", f"file_{op}"
+                e["file"] = _win_file(op, fields.get("ObjectName", ""), f"{dom}\\{usr}" if dom else usr,
+                                      fields.get("ProcessId"), fields.get("ProcessName", ""))
         elif eid == 4688 and chan.lower() == "security":
             e["category"], e["event_type"] = "process_creation", "process_creation"
             fields.setdefault("Image", fields.get("NewProcessName", ""))

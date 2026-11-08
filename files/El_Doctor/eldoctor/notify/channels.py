@@ -145,6 +145,8 @@ class JsonlChannel(Channel):
         if not path.is_absolute():
             path = home_dir() / path
         rec = {"kind": msg["kind"], "alert": msg["alert"], "actions": msg["actions"], "ts": time.time()}
+        from eldoctor.housekeeping import rotate_if_needed
+        rotate_if_needed(path)
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, default=str) + "\n")
 

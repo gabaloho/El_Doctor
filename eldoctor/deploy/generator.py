@@ -194,6 +194,11 @@ if command -v auditctl >/dev/null || {{ command -v apt-get >/dev/null && apt-get
   (augenrules --load || auditctl -R /etc/audit/rules.d/eldoctor.rules) >/dev/null 2>&1 || true
   systemctl enable --now auditd >/dev/null 2>&1 || true
 fi
+# Activity record (files created / edited / deleted / opened / downloaded): inotify needs one watch per folder
+if [[ "$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo 0)" -lt 524288 ]]; then
+  printf 'fs.inotify.max_user_watches = 524288\\n' > /etc/sysctl.d/60-eldoctor-inotify.conf
+  sysctl -q -p /etc/sysctl.d/60-eldoctor-inotify.conf || true
+fi
 install -m 0644 "$HERE/eldoctor.service" /etc/systemd/system/eldoctor.service
 
 export ELDOCTOR_HOME=/var/lib/eldoctor
@@ -212,10 +217,20 @@ echo "Console (any user, no sudo - talks to the service over /run/eldoctor/api.s
 echo "Audit trail: eldoctor audit verify  (admins; configure audit.forward in /etc/eldoctor/config.yaml for your SIEM)"
 """
 
+AUDIT_FILE_RULES = """## El Doctor activity record: who deleted / renamed people's files - the kernel names the process, the user
+## and the *login* user (auid) behind sudo / su. renameat2 has its own line so an older auditctl cannot reject the rest.
+-a always,exit -F arch=b64 -S unlink,unlinkat,rename,renameat,rmdir -F dir=/home -F success=1 -F key=eldoctor_file
+-a always,exit -F arch=b64 -S renameat2 -F dir=/home -F success=1 -F key=eldoctor_file
+-a always,exit -F arch=b32 -S unlink,unlinkat,rename,renameat,rmdir -F dir=/home -F success=1 -F key=eldoctor_file
+-a always,exit -F arch=b64 -S unlink,unlinkat,rename,renameat,rmdir -F dir=/root -F success=1 -F key=eldoctor_file
+## optional, much more volume (every write-open below /home, browser caches included): creations and edits too
+# -w /home -p wa -k eldoctor_file
+"""
+
 AUDIT_RULES = """## El Doctor: record every program execution (feeds Sigma/IOC/YARA with short-lived processes too)
 -a always,exit -F arch=b64 -S execve,execveat -F key=eldoctor_exec
 -a always,exit -F arch=b32 -S execve,execveat -F key=eldoctor_exec
-"""
+""" + AUDIT_FILE_RULES
 
 LINUX_UNINSTALL = """#!/usr/bin/env bash
 set -euo pipefail
@@ -233,7 +248,9 @@ WIN_INSTALL = r"""#Requires -RunAsAdministrator
     -Mode Service : unattended agent (Scheduled Task as SYSTEM at boot) - recommended for servers
     -Mode Desktop : Start-menu / desktop shortcut that opens the interactive console (approval prompts)
   Tip: install Sysmon (https://learn.microsoft.com/sysinternals/downloads/sysmon) so El Doctor's
-  Sigma rules see full process-creation and network events.
+  Sigma rules see full process-creation and network events, and its activity record knows WHO created
+  (event 11), deleted (23 / 26) or downloaded (15, Mark of the Web) each file - enable those event IDs for
+  C:\Users in your Sysmon configuration.
 #>
 param(
   [ValidateSet("Service", "Desktop", "Both")] [string]$Mode = "{win_mode}",
@@ -461,6 +478,12 @@ write_files:
     content: |
       -a always,exit -F arch=b64 -S execve,execveat -F key=eldoctor_exec
       -a always,exit -F arch=b32 -S execve,execveat -F key=eldoctor_exec
+      -a always,exit -F arch=b64 -S unlink,unlinkat,rename,renameat,rmdir -F dir=/home -F success=1 -F key=eldoctor_file
+      -a always,exit -F arch=b64 -S unlink,unlinkat,rename,renameat,rmdir -F dir=/root -F success=1 -F key=eldoctor_file
+  - path: /etc/sysctl.d/60-eldoctor-inotify.conf
+    permissions: "0644"
+    content: |
+      fs.inotify.max_user_watches = 524288
   - path: /etc/eldoctor/config.yaml
     permissions: "0600"
     encoding: b64
@@ -523,8 +546,9 @@ GCP_STARTUP = """#!/bin/bash
 set -euo pipefail
 if [[ -x /opt/eldoctor/venv/bin/eldoctor ]]; then systemctl start eldoctor.service; exit 0; fi
 apt-get update -y && apt-get install -y python3 python3-venv python3-pip auditd
-printf -- '-a always,exit -F arch=b64 -S execve,execveat -F key=eldoctor_exec\n' > /etc/audit/rules.d/eldoctor.rules
+printf -- '-a always,exit -F arch=b64 -S execve,execveat -F key=eldoctor_exec\\n-a always,exit -F arch=b64 -S unlink,unlinkat,rename,renameat,rmdir -F dir=/home -F success=1 -F key=eldoctor_file\\n' > /etc/audit/rules.d/eldoctor.rules
 augenrules --load || true
+printf 'fs.inotify.max_user_watches = 524288\\n' > /etc/sysctl.d/60-eldoctor-inotify.conf && sysctl -q --system || true
 install -d -m 0700 /etc/eldoctor /var/lib/eldoctor
 echo '{config_b64}' | base64 -d > /etc/eldoctor/config.yaml && chmod 600 /etc/eldoctor/config.yaml
 cat > /etc/eldoctor/eldoctor.env <<'ENV'
@@ -554,6 +578,13 @@ README_COMMON = """
 * Threat intel:       `eldoctor intel update` (abuse.ch, Emerging Threats ... needs outbound HTTPS)
 * Change mode:        edit `agent.mode` in config.yaml (monitor | interactive | enforce) and restart
 * Notifications:      enable channels in config.yaml and put secrets in the env file / secret
+* User activity:      `eldoctor activity now` (who is logged in, what they run), `eldoctor activity list --since 2h`,
+                      `eldoctor activity export --out triage.csv` (analyst / admin). Sessions, applications and files
+                      created / edited / deleted / opened / downloaded are recorded, survive reboots, and files deleted
+                      while El Doctor was off are found at the next start. Data-wipe incidents are e-mailed to the
+                      registered admins: configure SMTP (an `email` channel or `activity.report.smtp`).
+                      Containers only see mounted folders: bind-mount the host's /home read-only and list it in
+                      `activity.files.paths` to record people's files from a container.
 * Audit trail:        `eldoctor audit` / `eldoctor audit verify` (admin). Hash-chained and signed with forward-secure
                       one-time keys, forwarded in real time to `audit.forward` destinations and to enabled syslog
                       channels - point it at your SIEM. Right after installation run `eldoctor audit verify` and
@@ -625,7 +656,8 @@ def generate(target: str, out_dir: Path, profile: Optional[Dict[str, Any]] = Non
         write("run-console.bat", "@echo off\r\nset ELDOCTOR_HOME=%ProgramData%\\ElDoctor\r\n"
                                  "\"%ProgramFiles%\\ElDoctor\\venv\\Scripts\\eldoctor.exe\" --config "
                                  "\"%ProgramData%\\ElDoctor\\config.yaml\" tui\r\n")
-        steps = ("1. Install Python 3.9+ (`winget install Python.Python.3.12`). Optional but recommended: Sysmon.\n"
+        steps = ("1. Install Python 3.9+ (`winget install Python.Python.3.12`). Optional but recommended: Sysmon with "
+                 "file events 11 / 23 / 26 / 15 enabled for C:\\Users (who created, deleted, downloaded each file).\n"
                  "2. Open **PowerShell as Administrator** in this folder.\n"
                  "3. `Set-ExecutionPolicy -Scope Process Bypass; .\\install.ps1 -Mode Desktop|Service|Both`\n"
                  "   - Desktop: 'El Doctor' desktop/Start-menu shortcut opens the GUI (dashboard, alerts, approvals,\n"

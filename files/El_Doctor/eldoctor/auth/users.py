@@ -285,6 +285,50 @@ class UserManager:
                      bump_tokens=not active)
         self.store.audit(actor.username, "user_enabled" if active else "user_disabled", {"username": username})
 
+    # ------------------------------------------------------------------ passwords
+    def _set_password(self, username: str, password: str, extra_sql: str = "") -> None:
+        probs = password_problems(password, username)
+        if probs:
+            raise AuthError("weak password: " + ", ".join(probs))
+        ok = self._update(username, "UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = 0"
+                                    f"{extra_sql} WHERE username = ?", (hash_password(password), username),
+                          bump_tokens=True)                      # every existing session ends
+        if not ok:
+            raise AuthError("no such user")
+
+    def change_password(self, user: User, old: str, new: str) -> None:
+        rows = self.store.query("SELECT * FROM users WHERE username = ?", (user.username,))
+        if not rows or not verify_password(old, rows[0]["password_hash"] or ""):
+            self.store.audit(user.username, "password_change_failed", {"reason": "wrong current password"})
+            raise AuthError("the current password is wrong")
+        if old == new:
+            raise AuthError("the new password must differ from the current one")
+        self._set_password(user.username, new)
+        self.store.audit(user.username, "password_changed", {})
+
+    def reset_password(self, actor: User, username: str, new: str) -> None:
+        if not actor.can("manage_users"):
+            raise AuthError("only admins can reset another user's password")
+        if not self.get(username):
+            raise AuthError("no such user (or its record failed the integrity check)")
+        self._set_password(username, new)
+        self.store.audit(actor.username, "password_reset", {"username": username})
+
+    def recover(self, username: str, new: str, os_identity: str) -> User:
+        """Local recovery (forgotten password of the last admin): the API only calls this for the OS account that
+        runs the agent, or root / an elevated administrator - someone who could read the data folder anyway."""
+        target = self.get(username)
+        if not target:
+            raise AuthError("no such user (or its record failed the integrity check)")
+        self._set_password(username, new, extra_sql=", active = 1")
+        self.store.audit(username, "account_recovered", {"username": username, "role": target.role,
+                                                         "by_os_account": os_identity})
+        return self.get(username) or target
+
+    def first_admin(self) -> Optional[str]:
+        rows = self.store.query("SELECT username FROM users WHERE role = 'admin' ORDER BY id LIMIT 1")
+        return rows[0]["username"] if rows else None
+
     def logout_everywhere(self, user: User) -> None:
         self._update(user.username, "UPDATE users SET last_login = last_login WHERE username = ?", (user.username,),
                      bump_tokens=True)

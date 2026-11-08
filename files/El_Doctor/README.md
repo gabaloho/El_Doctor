@@ -24,6 +24,10 @@ turns it into a small **endpoint security tool with SOAR-style playbooks**:
   with *who did it* and *how we know*. The record survives shutdowns and reboots, finds files deleted
   while El Doctor was not running, and **e-mails every data-wipe incident — the user responsible and
   every affected file and folder — to the registered administrators**.
+* **connects the whole fleet to one console** with **El Doctor Hub** ([docs/HUB.md](docs/HUB.md)). Agents
+  enroll with a token and report over mutual TLS. Analysts get a fleet view, one alert queue with triage, remote
+  response on any computer and fleet-wide threat intel. An agent that goes silent, or whose audit trail is rolled
+  back, raises an alert at the hub.
 * **generates deployments** for Windows desktop/server, Linux (systemd), Docker, Kubernetes
   (DaemonSet), AWS, Azure and GCP VMs.
 
@@ -32,7 +36,28 @@ The original features (live metrics, CSV log, threshold e-mails, `q` to quit) ar
 
 ---
 
-## 1. Quick start
+## 0. Install (no technical knowledge needed)
+
+Download **one file** from the **Releases** page and open it:
+
+| Your computer | File | |
+|---|---|---|
+| Windows 10 / 11 | `ElDoctor-Setup-<version>.exe` | setup wizard: Next, Next, Finish |
+| Mac | `ElDoctor-<version>.dmg` | drag El Doctor onto Applications |
+| Ubuntu / Debian / Mint | `eldoctor_<version>_amd64.deb` | double-click, *Install* |
+| Fedora / RHEL / openSUSE | `eldoctor-<version>-1.x86_64.rpm` | double-click, *Install* |
+
+Then open **El Doctor** from the Start menu, Launchpad or applications menu. The Windows wizard can also turn on
+round-the-clock protection for the whole computer. It asks who manages El Doctor and installs the background
+service.
+
+**Portable / advanced:** the same program is also a standalone executable in the `.zip` / `.tar.gz` archives.
+Extract it and run `El Doctor.exe` or `./eldoctor`; `sudo ./install.sh` / `.\install.ps1` install the service.
+
+**[INSTALL.md](INSTALL.md)** walks through every screen, and covers checksums, services, e-mail, upgrades,
+backups and troubleshooting. Also see [CHANGELOG.md](CHANGELOG.md) and [SECURITY.md](SECURITY.md).
+
+## 1. Quick start (from source)
 
 Requires Python 3.9 or newer (tested on 3.12 and 3.14). From the `El_Doctor` folder:
 
@@ -74,6 +99,12 @@ eldoctor alerts | actions | rules | playbooks list | blocks list | quarantine li
 eldoctor audit | audit verify                # tamper-evident, signed audit trail + row ledger (admin)
 eldoctor audit verify-export audit.jsonl     # verify a SIEM / exported copy offline, no secret needed
 eldoctor whoami                              # your role + the OS identity the agent sees
+eldoctor doctor                              # is this installation ready? what to fix (no login needed)
+eldoctor passwd | users reset-password USER  # change your password / reset someone's (admin)
+eldoctor recover-admin                       # forgotten admin password: root / the agent's OS account only
+eldoctor install-service | uninstall-service # whole-computer protection (what the installers do; admin/root)
+eldoctor enroll <TOKEN>                      # join an El Doctor Hub (fleet console) - see docs/HUB.md
+eldoctor hub install-service --name HOST     # run a hub (Linux); then: eldoctor hub token | agents | alerts | respond
 eldoctor activity now                        # who is logged in right now and what they are running
 eldoctor activity list --since 2h            # timeline: sessions, apps, files created/edited/deleted/opened/downloaded
 eldoctor activity export --out triage.csv    # forensic export (CSV or --format jsonl)
@@ -385,6 +416,27 @@ Configuration: the `activity:` section of `config.yaml`. Defaults:
 Recording people's activity is monitoring. Deploy it under your organisation's acceptable-use /
 monitoring policy.
 
+## 5c. El Doctor Hub: the fleet console
+
+One server, the same program, for every El Doctor in the organisation. Full guide: **[docs/HUB.md](docs/HUB.md)**.
+
+```bash
+sudo eldoctor hub install-service --name hub.corp.example     # hub: CA, certificates, admin, hardened service
+eldoctor hub token --uses 50                                  # (as the hub account) enrollment token
+eldoctor enroll EDH1-...                                      # on each computer, as administrator / root
+```
+
+* **Fleet view**: online / late / silent / revoked, version, mode, who is logged in, open alerts.
+* **Alert queue**: alerts from every agent in one place. Triage with an assignee, a verdict and notes.
+* **Remote response**: kill, suspend, forensics, quarantine, block an IP, or change the mode, on any computer, within
+  that computer's own allow-list and safety guards. Recorded on both sides.
+* **Fleet threat intel**: add an indicator once; every agent detects / blocks it.
+* **The hub's own detections**: HUB-001 agent stopped reporting, HUB-002 agent back, HUB-003 audit trail rolled
+  back or rewritten on an endpoint, HUB-004 revoked agent tried to connect. They are notified like any alert.
+* **Security**: mutual TLS with the hub's own CA; the token carries the CA fingerprint, so there is no trust on
+  first use; agent keys never leave the computer; the console has no JavaScript, CSRF protection and strict
+  cookies. Every analyst action goes in the hub's signed audit trail.
+
 ## 6. Users and roles
 
 | Role | Can |
@@ -581,7 +633,7 @@ Production-readiness review and roadmap: [`docs/PRODUCTION_READINESS.md`](docs/P
 
 
 ```bash
-python -m pytest             # 230 tests (39 for the user-activity record; 2 GUI tests skip without Tk) incl. GUI, appearance + GUI-runtime tests (Python 3.14; GUI tests skip without Tk): Sigma engine, detections, guards, real kill/suspend/quarantine,
+python -m pytest             # 270+ tests (incl. user-activity, installers, El Doctor Hub over real mutual TLS; GUI tests skip without Tk) incl. GUI, appearance + GUI-runtime tests (Python 3.14; GUI tests skip without Tk): Sigma engine, detections, guards, real kill/suspend/quarantine,
                              # playbook modes & approvals, notifications over real HTTP/SMTP/UDP,
                              # auth/RBAC, deployment bundles, CLI gate, agent end-to-end, TUI in a pty,
                              # agent API (RBAC per method and role, JWT binding/revocation, Unix socket peer

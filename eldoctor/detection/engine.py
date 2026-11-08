@@ -19,6 +19,7 @@ from eldoctor.config import PLATFORM, package_data
 from eldoctor.detection import sigma as sg
 from eldoctor.detection.ioc import IOCStore
 from eldoctor.detection.yara_scan import YaraScanner
+from eldoctor.activity.rules import ACTIVITY_RULES
 from eldoctor.models import Alert, ProcessInfo
 
 # Catalogue of built-in rules: id -> (title, severity, mitre, description)
@@ -70,6 +71,7 @@ RULES: Dict[str, Tuple[str, str, List[str], str]] = {
     "ED-LOG-005": ("Windows logon brute force (4625)", "high", ["T1110.001"],
                    "Many failed Windows logons from one source."),
 }
+RULES.update(ACTIVITY_RULES)          # raised by the user-activity recorder (eldoctor.activity)
 
 
 def _is_loopback(ip: str) -> bool:

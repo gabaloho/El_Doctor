@@ -36,8 +36,8 @@ from eldoctor.storage import Store
 ROLES = ["viewer", "analyst", "admin"]
 PERMISSIONS = {
     "viewer": {"view"},
-    "analyst": {"view", "run", "approve", "respond", "intel", "notify_test"},
-    "admin": {"view", "run", "approve", "respond", "intel", "notify_test", "enforce", "manage_users",
+    "analyst": {"view", "run", "approve", "respond", "intel", "notify_test", "forensics"},
+    "admin": {"view", "run", "approve", "respond", "intel", "notify_test", "forensics", "enforce", "manage_users",
               "deploy", "restore", "unblock", "config", "audit"},
 }
 USE_CASES = {

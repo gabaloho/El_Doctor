@@ -80,6 +80,29 @@ CREATE INDEX IF NOT EXISTS idx_audit_event ON audit(event);
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY, value TEXT, mac TEXT
 );
+-- user activity (forensics): sessions, applications, file activity, boots/shutdowns, data-wipe incidents.
+-- Append-only; every insert batch is sealed by one 'activity_sealed' record in the signed audit chain.
+CREATE TABLE IF NOT EXISTS activity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, kind TEXT, category TEXT, user TEXT DEFAULT '',
+    login_user TEXT DEFAULT '', pid INTEGER, process TEXT DEFAULT '', exe TEXT DEFAULT '', path TEXT DEFAULT '',
+    target TEXT DEFAULT '', is_dir INTEGER DEFAULT 0, size INTEGER, source TEXT DEFAULT '',
+    attribution TEXT DEFAULT '', boot_id TEXT DEFAULT '', details TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity(ts);
+CREATE INDEX IF NOT EXISTS idx_activity_kind ON activity(kind, ts);
+CREATE INDEX IF NOT EXISTS idx_activity_user ON activity(user, ts);
+CREATE INDEX IF NOT EXISTS idx_activity_path ON activity(path);
+-- last known state of the watched folders: survives reboots, so changes made while the agent was not running
+-- (offline wipe, another OS booted from USB...) are found at the next start
+CREATE TABLE IF NOT EXISTS file_index (
+    path TEXT PRIMARY KEY, root TEXT, is_dir INTEGER, size INTEGER, mtime_ns INTEGER, ino INTEGER
+);
+-- reports for the registered administrators: persisted until delivered (retried across restarts / reboots)
+CREATE TABLE IF NOT EXISTS outbox (
+    id TEXT PRIMARY KEY, ts REAL, kind TEXT, subject TEXT, body TEXT, attachments TEXT, ref TEXT DEFAULT '',
+    status TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0, next_try REAL DEFAULT 0, last_error TEXT DEFAULT '',
+    recipients TEXT DEFAULT '', sent_ts REAL DEFAULT 0
+);
 """
 
 # columns added after the first release: (table, column, declaration) - applied to older databases
@@ -116,7 +139,9 @@ LEDGER_EVENTS = {"alert": "alert_recorded", "action": "action_recorded", "user":
                  "block": "block_state", "quarantine": "quarantine_state", "approval": "approval_requested"}
 # chain bookkeeping, hidden from the default audit listing (still chained, verified and forwarded)
 BOOKKEEPING_EVENTS = ("alert_recorded", "action_recorded", "user_state", "block_state", "quarantine_state",
-                      "ledger_batch")
+                      "ledger_batch", "activity_sealed")
+ACTIVITY_COLUMNS = ("ts", "kind", "category", "user", "login_user", "pid", "process", "exe", "path", "target", "is_dir",
+                    "size", "source", "attribution", "boot_id", "details")
 
 DECISION_EVENTS = ("approval_decided", "approval_expired")
 # response actions that change the system: each one executed also goes into the hash-chained audit trail
@@ -188,6 +213,7 @@ class Store:
         self.keys = Keyring(self.path.parent)
         self.signer = SigningChain(self.keys.dir)
         self._ledger: Optional[Dict[Tuple[str, str], Tuple[int, str]]] = None     # verified index (agent)
+        self._act_pending: List[Tuple[int, str]] = []     # activity rows written by this process, not sealed yet
         self._lv: Dict[str, Any] = {}
         # autocommit mode: transactions are explicit (BEGIN IMMEDIATE) so multi-statement updates and
         # audit appends are atomic across processes
@@ -907,6 +933,289 @@ class Store:
             self.execute("UPDATE quarantine SET restored = 1 WHERE id = ?", (qid,))
             self._ledger_write("quarantine", qid, summary={"id": qid, "restored": True})
 
+    # ------------------------------------------------------------------ user activity (forensics)
+    @staticmethod
+    def _activity_fields(r: Dict[str, Any]) -> list:
+        return [int(r["id"])] + [r.get(c) for c in ACTIVITY_COLUMNS]
+
+    def _activity_digest(self, rows: List[Dict[str, Any]]) -> str:
+        return self._combine([row_digest("activity", self._activity_fields(r)) for r in rows])
+
+    @staticmethod
+    def _combine(digests: List[str]) -> str:
+        import hashlib
+        h = hashlib.sha256(b"eldoctor-activity-v1")
+        for d in digests:
+            h.update(d.encode())
+        return h.hexdigest()
+
+    def add_activity(self, rows: List[Dict[str, Any]], index_ops: Optional[List[tuple]] = None,
+                     in_tx: Optional[Callable[[sqlite3.Connection], None]] = None, seal: bool = True) -> List[int]:
+        """Append activity rows atomically with the file-index changes they imply.
+
+        Rows are committed at once (nothing is lost if the machine dies).  Each row's digest is taken *inside*
+        the inserting transaction, and an ``activity_sealed`` record in the signed audit chain covers a run of
+        consecutive rows: (first id, last id, count, digest of every row).  ``seal=False`` defers that record
+        (``seal_activity``): one signed record per minute instead of one per agent cycle keeps the chain - and
+        its periodic verification - small, while an edit made before the seal still breaks it (the digests
+        were computed at insert time) and a foreign row inside a sealed range breaks the count."""
+        ids: List[int] = []
+        if not rows and not index_ops and in_tx is None:
+            return ids
+        with self.tx() as c:
+            for r in rows:
+                vals = []
+                for col in ACTIVITY_COLUMNS:
+                    v = r.get(col)
+                    if col == "details":
+                        v = json.dumps(v, default=str, sort_keys=True) if isinstance(v, (dict, list)) else (v or "")
+                    elif col in ("pid", "size") and v is not None:
+                        v = int(v)
+                    elif col == "is_dir":
+                        v = int(bool(v))
+                    elif col == "ts":
+                        v = float(v if v is not None else time.time())
+                    elif v is None:
+                        v = ""
+                    else:
+                        v = str(v)
+                    vals.append(v)
+                cur = c.execute(f"INSERT INTO activity ({', '.join(ACTIVITY_COLUMNS)}) VALUES "
+                                f"({', '.join('?' * len(ACTIVITY_COLUMNS))})", vals)
+                ids.append(int(cur.lastrowid))
+            new: List[Tuple[int, str]] = []
+            if ids:
+                stored = [dict(x) for x in c.execute("SELECT * FROM activity WHERE id BETWEEN ? AND ? ORDER BY id",
+                                                     (ids[0], ids[-1])).fetchall()]
+                new = [(int(r["id"]), row_digest("activity", self._activity_fields(r))) for r in stored]
+            if seal:
+                self._seal(self._act_pending + new)
+                self._after_commit.append(self._act_pending.clear)
+            elif new:
+                self._after_commit.append(lambda new=new: self._act_pending.extend(new))
+            for op in index_ops or []:
+                self._file_index_op(c, op)
+            if in_tx is not None:
+                in_tx(c)
+        return ids
+
+    def _seal(self, batch: List[Tuple[int, str]], recovered: bool = False) -> None:
+        if not batch:
+            return
+        d = {"first": batch[0][0], "last": batch[-1][0], "count": len(batch), "digest": self._combine([x[1] for x in batch])}
+        if recovered:
+            d.update(recovered=True, note="rows written before an unclean stop, sealed at the next start: their content "
+                                          "between the stop and this record is not verified")
+        self.audit("system", "activity_sealed", d)
+
+    def seal_activity(self) -> int:
+        """Seal the rows this process wrote since the last seal.  Returns how many."""
+        with self._lock:
+            if not self._act_pending:
+                return 0
+            with self.tx():
+                n = len(self._act_pending)
+                self._seal(list(self._act_pending))
+                self._after_commit.append(self._act_pending.clear)
+            return n
+
+    def seal_recovered_activity(self) -> int:
+        """At start-up: rows beyond the last seal were written by an agent that died before sealing them."""
+        with self._lock:
+            if self._act_pending:
+                return 0
+            last = 0
+            for r in self.query("SELECT details FROM audit WHERE event IN ('activity_sealed', 'activity_pruned')"):
+                try:
+                    d = json.loads(r["details"] or "{}")
+                    last = max(last, int(d.get("last") or d.get("upto") or 0))
+                except (ValueError, TypeError):
+                    continue
+            rows = self.query("SELECT * FROM activity WHERE id > ? ORDER BY id", (last,))
+            if not rows:
+                return 0
+            with self.tx():
+                self._seal([(int(r["id"]), row_digest("activity", self._activity_fields(r))) for r in rows],
+                           recovered=True)
+            return len(rows)
+
+    def verify_activity(self, chunk: int = 20000) -> List[Dict[str, Any]]:
+        """Every activity row against the batch seals in the signed chain: modified, deleted, inserted rows."""
+        problems: List[Dict[str, Any]] = []
+        pruned = 0
+        for r in self.query("SELECT details FROM audit WHERE event = 'activity_pruned'"):
+            try:
+                pruned = max(pruned, int(json.loads(r["details"] or "{}").get("upto") or 0))
+            except (ValueError, TypeError):
+                pass
+        seals: List[Tuple[int, int, int, str, int]] = []
+        for r in self.query("SELECT id, details FROM audit WHERE event = 'activity_sealed' ORDER BY id"):
+            try:
+                d = json.loads(r["details"] or "{}")
+                seals.append((int(d["first"]), int(d["last"]), int(d["count"]), str(d["digest"]), int(r["id"])))
+            except (ValueError, TypeError, KeyError):
+                problems.append({"seq": r["id"], "problem": "unreadable activity seal record"})
+        covered_upto = pruned
+        for first, last, count, digest, seq in seals:
+            if last <= pruned:
+                continue
+            rows = self.query("SELECT * FROM activity WHERE id BETWEEN ? AND ? ORDER BY id", (first, last))
+            if len(rows) < count:
+                problems.append({"seq": seq, "problem": f"activity rows {first}..{last}: {count - len(rows)} of {count} "
+                                                        f"recorded rows were deleted"})
+            elif len(rows) > count:
+                problems.append({"seq": seq, "problem": f"activity rows {first}..{last}: {len(rows) - count} rows were "
+                                                        f"inserted outside El Doctor"})
+            elif self._activity_digest(rows) != digest:
+                problems.append({"seq": seq, "problem": f"activity rows {first}..{last} were modified after they were "
+                                                        f"recorded"})
+            covered_upto = max(covered_upto, last)
+        # rows that no seal covers: inserted behind the agent's back, or written by an agent that stopped uncleanly
+        # (sealed as 'recovered' at its next start).  Rows this process wrote and will seal are not a problem.
+        ranges = sorted((a, b) for a, b, _, _, _ in seals if b > pruned)
+        own = {i for i, _ in self._act_pending}
+        last_id, ri, uncovered = pruned, 0, []
+        while True:
+            ids = [r["id"] for r in self.query("SELECT id FROM activity WHERE id > ? ORDER BY id LIMIT ?",
+                                               (last_id, chunk))]
+            if not ids:
+                break
+            for i in ids:
+                while ri < len(ranges) and ranges[ri][1] < i:
+                    ri += 1
+                if not (ri < len(ranges) and ranges[ri][0] <= i <= ranges[ri][1]) and i not in own:
+                    uncovered.append(i)
+            last_id = ids[-1]
+        if uncovered:
+            problems.append({"seq": None, "problem": f"{len(uncovered)} activity rows (ids {uncovered[0]}.."
+                                                     f"{uncovered[-1]}) were not recorded by the agent (or the agent "
+                                                     f"stopped before sealing them)"})
+        return problems
+
+    def prune_activity(self, before_ts: float) -> int:
+        """Retention: delete whole sealed batches whose newest row is older than ``before_ts``."""
+        upto = 0
+        for r in self.query("SELECT details FROM audit WHERE event = 'activity_sealed' ORDER BY id"):
+            try:
+                d = json.loads(r["details"] or "{}")
+            except ValueError:
+                continue
+            newest = self.query("SELECT MAX(ts) AS t FROM activity WHERE id BETWEEN ? AND ?",
+                                (int(d["first"]), int(d["last"])))[0]["t"]
+            if newest is not None and newest >= before_ts:
+                break
+            upto = max(upto, int(d["last"]))
+        if not upto:
+            return 0
+        with self.tx() as c:
+            n = c.execute("DELETE FROM activity WHERE id <= ?", (upto,)).rowcount
+            self.audit("system", "activity_pruned", {"upto": upto, "rows": n, "before": before_ts})
+        return n
+
+    def list_activity(self, limit: int = 100, since: float = 0, until: float = 0, user: str = "", kind: str = "",
+                      category: str = "", path: str = "", text: str = "", pid: int = 0, before_id: int = 0,
+                      after_id: int = 0, ascending: bool = False) -> List[Dict[str, Any]]:
+        where, params = ["1=1"], []
+        for col, val in (("user", user), ("kind", kind), ("category", category)):
+            if val:
+                vals = [v.strip() for v in str(val).split(",") if v.strip()]
+                where.append(f"{col} IN ({','.join('?' * len(vals))})")
+                params += vals
+        if since:
+            where.append("ts >= ?"); params.append(float(since))
+        if until:
+            where.append("ts <= ?"); params.append(float(until))
+        if path:
+            where.append("(path LIKE ? ESCAPE '\\' OR target LIKE ? ESCAPE '\\')")
+            esc = str(path).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            params += [esc, esc]
+        if text:
+            esc = "%" + str(text).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            where.append("(path LIKE ? ESCAPE '\\' OR target LIKE ? ESCAPE '\\' OR process LIKE ? ESCAPE '\\' "
+                         "OR details LIKE ? ESCAPE '\\' OR user LIKE ? ESCAPE '\\')")
+            params += [esc] * 5
+        if pid:
+            where.append("pid = ?"); params.append(int(pid))
+        if before_id:
+            where.append("id < ?"); params.append(int(before_id))
+        if after_id:
+            where.append("id > ?"); params.append(int(after_id))
+        order = "ASC" if ascending else "DESC"
+        rows = self.query(f"SELECT * FROM activity WHERE {' AND '.join(where)} ORDER BY id {order} LIMIT ?",
+                          (*params, int(limit)))
+        for r in rows:
+            try:
+                r["details"] = json.loads(r["details"]) if r.get("details") else {}
+            except ValueError:
+                pass
+        return rows
+
+    # ------------------------------------------------------------------ file index (last known state of watched folders)
+    @staticmethod
+    def _prefix_range(path: str) -> Tuple[str, str]:
+        sep = "\\" if ("\\" in path and "/" not in path) else "/"
+        prefix = path.rstrip(sep) + sep
+        return prefix, prefix[:-1] + chr(ord(sep) + 1)
+
+    def _file_index_op(self, c: sqlite3.Connection, op: tuple) -> None:
+        kind = op[0]
+        if kind == "put":                   # ("put", path, root, is_dir, size, mtime_ns, ino)
+            c.execute("INSERT OR REPLACE INTO file_index (path, root, is_dir, size, mtime_ns, ino) VALUES (?,?,?,?,?,?)",
+                      op[1:7])
+        elif kind == "del":                 # ("del", path)  - the entry and everything below it
+            lo, hi = self._prefix_range(op[1])
+            c.execute("DELETE FROM file_index WHERE path = ? OR (path >= ? AND path < ?)", (op[1], lo, hi))
+        elif kind == "move":                # ("move", old, new, new_root)
+            old, new, root = op[1], op[2], op[3]
+            lo, hi = self._prefix_range(old)
+            c.execute("DELETE FROM file_index WHERE path = ? OR (path >= ? AND path < ?)", (new, *self._prefix_range(new)))
+            c.execute("UPDATE file_index SET path = ? || substr(path, ?), root = ? WHERE path = ? OR (path >= ? AND path < ?)",
+                      (new, len(old) + 1, root, old, lo, hi))
+        else:
+            raise ValueError(f"unknown file index op {kind!r}")
+
+    def file_index_get(self, path: str) -> Optional[Dict[str, Any]]:
+        rows = self.query("SELECT * FROM file_index WHERE path = ?", (path,))
+        return rows[0] if rows else None
+
+    def file_index_children(self, path: str, limit: int = 100000) -> List[Dict[str, Any]]:
+        lo, hi = self._prefix_range(path)
+        return self.query("SELECT * FROM file_index WHERE path >= ? AND path < ? LIMIT ?", (lo, hi, limit))
+
+    def file_index_stats(self) -> Dict[str, Any]:
+        r = self.query("SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN is_dir THEN 0 ELSE size END), 0) AS bytes,"
+                       " SUM(is_dir) AS dirs FROM file_index")[0]
+        return {"entries": r["n"], "bytes": r["bytes"], "folders": r["dirs"] or 0}
+
+    # ------------------------------------------------------------------ outbox (reports to the registered administrators)
+    def outbox_add(self, kind: str, subject: str, body: str, attachments: Optional[List[Dict[str, Any]]] = None,
+                   ref: str = "") -> str:
+        oid = uuid.uuid4().hex[:12]
+        import hashlib
+        raw = json.dumps(attachments or [], default=str)
+        with self.tx() as c:
+            c.execute("INSERT INTO outbox (id, ts, kind, subject, body, attachments, ref, status) VALUES (?,?,?,?,?,?,?,"
+                      "'pending')", (oid, time.time(), kind, subject, body, raw, ref))
+            self.audit("agent", "admin_report_queued",
+                       {"id": oid, "kind": kind, "subject": subject, "ref": ref,
+                        "digest": hashlib.sha256((subject + "\n" + body + "\n" + raw).encode()).hexdigest()})
+        return oid
+
+    def outbox_due(self, now: Optional[float] = None) -> List[Dict[str, Any]]:
+        return self.query("SELECT * FROM outbox WHERE status = 'pending' AND next_try <= ? ORDER BY ts",
+                          (now if now is not None else time.time(),))
+
+    def outbox_update(self, oid: str, **fields: Any) -> None:
+        cols = [k for k in fields if k in ("status", "attempts", "next_try", "last_error", "recipients", "sent_ts")]
+        if not cols:
+            return
+        self.execute(f"UPDATE outbox SET {', '.join(c + ' = ?' for c in cols)} WHERE id = ?",
+                     (*[fields[c] for c in cols], oid))
+
+    def outbox_list(self, limit: int = 100) -> List[Dict[str, Any]]:
+        return self.query("SELECT id, ts, kind, subject, ref, status, attempts, next_try, last_error, recipients, sent_ts,"
+                          " length(attachments) AS attachment_bytes FROM outbox ORDER BY ts DESC LIMIT ?", (limit,))
+
     # ------------------------------------------------------------------ audit (hash chain)
     def audit(self, actor: str, event: str, details: Any = None,
               ref: Optional[Tuple[str, str, str]] = None) -> Dict[str, Any]:
@@ -1027,6 +1336,7 @@ class Store:
             problems.append({"seq": None, "problem": "the key committed for the next record is missing (the next "
                                                      "append will restart the signing-key chain)"})
         problems += self.verify_ledger()
+        problems += self.verify_activity()
         problems += [{"seq": None, "problem": p} for p in self.integrity_problems]
         return {"ok": not problems, "checked": checked, "signed": signed, "head": {"seq": seq - 1, "hash": prev},
                 "genesis": gfp, "legacy_upto": self.meta_get("audit_legacy_upto") or 0, "kid": self.keys.kid,

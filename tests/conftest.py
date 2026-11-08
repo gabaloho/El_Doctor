@@ -25,7 +25,10 @@ def cfg():
     from eldoctor.config import load_config
     c = load_config(overrides={"notifications": {"channels": []}, "logs": {"files": [], "journald": False,
                                                                             "auditd": False,
-                                                                            "windows_eventlog": False}})
+                                                                            "windows_eventlog": False},
+                               # hermetic: the activity recorder never watches the real home folder in tests
+                               # (tests/test_activity.py points it at temporary folders)
+                               "activity": {"files": {"enabled": False}, "wtmp": ""}})
     # hermetic tests: response actions may only touch processes this test run started
     c["safety"]["only_descendants_of"] = [os.getpid()]
     return c
