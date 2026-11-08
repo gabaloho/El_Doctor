@@ -149,36 +149,48 @@ class JsonlChannel(Channel):
             fh.write(json.dumps(rec, default=str) + "\n")
 
 
+def send_email(conf: Dict[str, Any], to: List[str], subject: str, body: str,
+               attachments: Optional[List[Dict[str, Any]]] = None) -> None:
+    """Send one e-mail with the SMTP settings of ``conf`` (smtp_host, smtp_port, ssl, starttls, username,
+    password_env, from, timeout).  ``attachments``: [{name, mime ("text/csv"), data (bytes)}]."""
+    c = conf
+    if not to:
+        raise ChannelError("email: no recipients")
+    em = EmailMessage()
+    # names in subjects come from processes / files anyone can create: no line breaks (header injection, and
+    # the email package refuses them - the report would never be sent)
+    em["Subject"] = " ".join("".join(ch if ch.isprintable() else " " for ch in str(subject)).split())[:300]
+    em["From"] = c.get("from") or c.get("username") or f"eldoctor@{HOSTNAME}"
+    em["To"] = ", ".join(to)
+    em.set_content(body)
+    for a in attachments or []:
+        maintype, _, subtype = str(a.get("mime") or "application/octet-stream").partition("/")
+        em.add_attachment(a["data"], maintype=maintype, subtype=subtype or "octet-stream", filename=a["name"])
+    host, port = c.get("smtp_host", "localhost"), int(c.get("smtp_port", 587))
+    timeout = float(c.get("timeout", 15))
+    try:
+        if c.get("ssl"):
+            server = smtplib.SMTP_SSL(host, port, timeout=timeout, context=ssl.create_default_context())
+        else:
+            server = smtplib.SMTP(host, port, timeout=timeout)
+        with server:
+            if c.get("starttls", True) and not c.get("ssl"):
+                server.starttls(context=ssl.create_default_context())
+            if c.get("username"):
+                server.login(c["username"], _secret(c, "password"))
+            server.send_message(em)
+    except (smtplib.SMTPException, OSError) as exc:
+        raise ChannelError(f"email: {exc}") from exc
+
+
 class EmailChannel(Channel):
     type = "email"
 
     def send(self, msg: Dict[str, Any]) -> None:
-        c = self.conf
-        to = c.get("to") or []
+        to = self.conf.get("to") or []
         if isinstance(to, str):
             to = [to]
-        if not to:
-            raise ChannelError("email: no recipients")
-        em = EmailMessage()
-        em["Subject"] = msg["title"]
-        em["From"] = c.get("from") or c.get("username") or f"eldoctor@{HOSTNAME}"
-        em["To"] = ", ".join(to)
-        em.set_content(msg["text"])
-        host, port = c.get("smtp_host", "localhost"), int(c.get("smtp_port", 587))
-        timeout = float(c.get("timeout", 15))
-        try:
-            if c.get("ssl"):
-                server = smtplib.SMTP_SSL(host, port, timeout=timeout, context=ssl.create_default_context())
-            else:
-                server = smtplib.SMTP(host, port, timeout=timeout)
-            with server:
-                if c.get("starttls", True) and not c.get("ssl"):
-                    server.starttls(context=ssl.create_default_context())
-                if c.get("username"):
-                    server.login(c["username"], _secret(c, "password"))
-                server.send_message(em)
-        except (smtplib.SMTPException, OSError) as exc:
-            raise ChannelError(f"email: {exc}") from exc
+        send_email(self.conf, to, msg["title"], msg["text"])
 
 
 class SlackChannel(Channel):

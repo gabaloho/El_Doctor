@@ -105,6 +105,9 @@ class Agent:
         self.procs = ProcessCollector(dc.get("hash_executables", True), int(dc.get("max_hash_mb", 100)))
         self.logs = LogManager(cfg)
         self.initial_scan = bool(ac.get("initial_scan", True))
+        # who is logged in, what they run, which files they create / edit / delete / open / download
+        from eldoctor.activity.monitor import ActivityMonitor
+        self.activity = ActivityMonitor(cfg, store, iocs=self.engine.iocs, errors=self.dispatcher.errors)
         # state for the UI
         self.latest_metrics: Dict[str, Any] = {}
         self.latest_procs: List[ProcessInfo] = []
@@ -146,6 +149,7 @@ class Agent:
         self.engine.blocked_ips = blocked
 
         procs, new = self.procs.snapshot()
+        new_all = new
         initial = self.ticks == 0
         m = self.metrics.collect()
         self.metrics.log_csv(m)
@@ -157,8 +161,11 @@ class Agent:
         alerts += self.engine.on_metrics(m, procs)
         by_pid = {p.pid: p for p in procs}
         alerts += self.engine.on_connections(connections(), by_pid)
-        for ev in self.logs.poll():
+        log_events = self.logs.poll()
+        for ev in log_events:
             alerts += self.engine.on_log(ev)
+        self.activity.iocs = self.engine.iocs           # threat-intel updates replace the store
+        alerts += self.activity.tick(procs, new_all, log_events)
 
         with self.lock:
             self.latest_metrics = m
@@ -251,6 +258,7 @@ class Agent:
                           "sigma_rules": len(self.engine.sigma_rules), "playbooks": len(self.playbooks.playbooks),
                           "iocs": len(self.engine.iocs)})
         self._maybe_start_intel_updates()
+        self.activity.start()
         end = time.time() + duration if duration else None
         try:
             while not self._stop.is_set():
@@ -264,6 +272,7 @@ class Agent:
                 self._stop.wait(max(0.0, self.interval - (time.time() - start)))
         finally:
             self.logs.stop()
+            self.activity.stop(clean=True)     # last records, open wipe incident report, sign-off for the next boot
             self.dispatcher.close()            # flush pending notifications and stop the worker thread
             self._release_lock()
             self.store.audit(self.user.username if self.user else "agent", "agent_stopped", {"ticks": self.ticks})
@@ -317,4 +326,6 @@ class Agent:
                 "own_mem_mb": own_mem, "breaker": self.guard.breaker_open, "log_sources": self.logs.sources,
                 "sigma_rules": len(self.engine.sigma_rules), "playbooks": len(self.playbooks.playbooks),
                 "iocs": len(self.engine.iocs), "yara": self.engine.yara.enabled,
-                "notify_errors": list(self.dispatcher.errors)[-3:]}
+                "notify_errors": list(self.dispatcher.errors)[-3:],
+                "activity": {"backend": self.activity.backend, "roots": self.activity.roots,
+                             "recorded": sum(self.activity.counts.values())}}

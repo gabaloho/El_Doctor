@@ -104,7 +104,9 @@ def test_deploy_bundles(tmp_path, target):
     if target == "linux":
         unit = (tmp_path / target / "eldoctor.service").read_text()
         assert "service --bootstrap" in unit and "CAP_KILL" in unit
-        assert "execve" in (tmp_path / target / "eldoctor-audit.rules").read_text()
+        rules = (tmp_path / target / "eldoctor-audit.rules").read_text()
+        assert "execve" in rules and "-F dir=/home -F success=1 -F key=eldoctor_file" in rules
+        assert "max_user_watches" in (tmp_path / target / "install.sh").read_text()
         assert subprocess.run(["bash", "-n", str(tmp_path / target / "install.sh")]).returncode == 0
     if target == "kubernetes":
         ds = list(yaml.safe_load_all((tmp_path / target / "30-daemonset.yaml").read_text()))

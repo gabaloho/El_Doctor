@@ -11,7 +11,7 @@ hosts the agent in-process and serves the API for other terminals.  Either way e
 action and every permission check happens inside the agent; the GUI only greys out
 controls using the permission list the agent reports.
 
-Keyboard: Ctrl+1..9 switch tabs, F5 refresh, Delete = kill selected process,
+Keyboard: Ctrl+1..9, Ctrl+0 switch tabs, F5 refresh, Delete = kill selected process,
 Alt+A / Alt+D approve / deny the selected request, Ctrl+Q quit.
 """
 from __future__ import annotations
@@ -712,7 +712,7 @@ class ApiKeyDialog(tk.Toplevel):
 # ----------------------------------------------------------------------------------------- main view
 class MainView(ttk.Frame):
     TABS = ["Dashboard", "Processes", "Alerts", "Response log", "Approvals", "Threat intel & rules",
-            "Blocks & quarantine", "Deploy", "Users & settings"]
+            "Blocks & quarantine", "User activity", "Deploy", "Users & settings"]
 
     def __init__(self, app: App, last_alert_ts: Optional[float] = None) -> None:
         super().__init__(app.root)
@@ -748,11 +748,18 @@ class MainView(ttk.Frame):
         self._tab_approvals(self.tabs["Approvals"])
         self._tab_intel(self.tabs["Threat intel & rules"])
         self._tab_blocks(self.tabs["Blocks & quarantine"])
+        try:                                   # an error in this tab must never take the whole window down
+            self._tab_activity(self.tabs["User activity"])
+        except Exception as exc:               # pragma: no cover - defensive
+            self.act_tree = None
+            ttk.Label(self.tabs["User activity"], text=f"User activity view unavailable: {exc}",
+                      style="Muted.TLabel").pack(anchor="w")
         self._tab_deploy(self.tabs["Deploy"])
         self._tab_users(self.tabs["Users & settings"])
         root = app.root
         for i in range(1, 10):
             root.bind(f"<Control-Key-{i}>", lambda e, i=i: self.nb.select(i - 1))
+        root.bind("<Control-Key-0>", lambda e: self.nb.select(len(self.TABS) - 1))     # 10th tab: Users & settings
         root.bind("<F5>", lambda e: self.refresh(force=True))
         root.bind("<Alt-a>", lambda e: self.decide(True))
         root.bind("<Alt-d>", lambda e: self.decide(False))
@@ -1378,6 +1385,117 @@ class MainView(ttk.Frame):
                                                                                        parent=self)
         self.refresh(force=True)
 
+    # -------------------------------------------------------------- user activity (forensics)
+    def _tab_activity(self, tab) -> None:
+        self.act_tree = None
+        self._act_now_ts = 0.0
+        self._act_cache: Dict[str, Dict[str, Any]] = {}
+        self.act_category = tk.StringVar(value="all")
+        self.act_since = tk.StringVar(value="24 hours")
+        self.act_user = tk.StringVar()
+        self.act_search = tk.StringVar()
+        self.act_now = tk.StringVar(value="")
+        if not self.can("forensics"):
+            ttk.Label(tab, text="The user-activity record (sessions, applications, files created / edited / deleted / "
+                                "opened / downloaded) is visible to analysts and admins only.",
+                      style="Muted.TLabel", wraplength=1100).pack(anchor="w")
+            return
+        ttk.Label(tab, textvariable=self.act_now, style="Muted.TLabel", wraplength=1200).pack(anchor="w", pady=(0, 6))
+        top = ttk.Frame(tab)
+        top.pack(fill="x", pady=(0, 8))
+        ttk.Label(top, text="Show:").pack(side="left")
+        ttk.Combobox(top, textvariable=self.act_category, state="readonly", width=10,
+                     values=["all", "file", "session", "process", "system", "incident"]).pack(side="left", padx=6)
+        ttk.Label(top, text="Last:").pack(side="left", padx=(8, 0))
+        ttk.Combobox(top, textvariable=self.act_since, state="readonly", width=10,
+                     values=["1 hour", "24 hours", "7 days", "30 days", "all"]).pack(side="left", padx=6)
+        ttk.Label(top, text="User:").pack(side="left", padx=(8, 0))
+        ttk.Entry(top, textvariable=self.act_user, width=14).pack(side="left", padx=6)
+        ttk.Label(top, text="Search:").pack(side="left", padx=(8, 0))
+        ttk.Entry(top, textvariable=self.act_search, width=26).pack(side="left", padx=6)
+        ttk.Button(top, text="Export CSV...", command=self.activity_export).pack(side="right", padx=2)
+        pw = ttk.PanedWindow(tab, orient="vertical")
+        pw.pack(fill="both", expand=True)
+        upper, lower = ttk.Frame(pw), ttk.Frame(pw)
+        pw.add(upper, weight=3)
+        pw.add(lower, weight=1)
+        self.act_tree = self.tree(upper, [("time", "Time", 140, "w"), ("kind", "What happened", 130, "w"),
+                                          ("user", "User", 130, "w"), ("proc", "Process", 150, "w"),
+                                          ("what", "File / details", 520, "w"), ("how", "How we know", 90, "w"),
+                                          ("src", "Source", 80, "w")], height=16)
+        self.act_tree.tag_configure("del", foreground=C["crit"])
+        self.act_tree.tag_configure("inc", foreground=C["crit"])
+        self.act_tree.tag_configure("dl", foreground=C["warn"])
+        self.act_tree.bind("<<TreeviewSelect>>", lambda e: self.show_activity())
+        self.act_detail = tk.Text(lower, bg=C["panel"], fg=C["fg"], insertbackground=C["fg"], relief="flat",
+                                  font=self.app.f_mono, wrap="word", height=8, padx=10, pady=8)
+        self.act_detail.pack(fill="both", expand=True, pady=(8, 0))
+
+    def _activity_params(self) -> Dict[str, Any]:
+        since = {"1 hour": 3600, "24 hours": 86400, "7 days": 7 * 86400, "30 days": 30 * 86400}.get(self.act_since.get())
+        p: Dict[str, Any] = {}
+        if since:
+            p["since"] = time.time() - since
+        if self.act_category.get() != "all":
+            p["category"] = self.act_category.get()
+        if self.act_user.get().strip():
+            p["user"] = self.act_user.get().strip()
+        if self.act_search.get().strip():
+            p["q"] = self.act_search.get().strip()
+        return p
+
+    def show_activity(self) -> None:
+        sel = self.act_tree.selection() if self.act_tree else ()
+        r = self._act_cache.get(sel[0]) if sel else None
+        self.act_detail.delete("1.0", "end")
+        if r:
+            self.act_detail.insert("end", json.dumps({k: v for k, v in r.items() if v not in (None, "", {})},
+                                                     indent=2, default=str))
+
+    def activity_export(self) -> None:
+        from eldoctor.activity.export import export
+        from eldoctor.api.client import ApiError
+        path = filedialog.asksaveasfilename(parent=self, title="Export the activity record", defaultextension=".csv",
+                                            filetypes=[("CSV", "*.csv"), ("JSON lines", "*.jsonl")])
+        if not path:
+            return
+        params = self._activity_params()
+
+        def work():
+            return export(self.call, path, params, "jsonl" if path.endswith(".jsonl") else "csv")
+
+        def done(res):
+            if isinstance(res, ApiError):
+                self._api_error("Export", res)
+            elif isinstance(res, Exception):
+                messagebox.showerror("Export", str(res), parent=self)
+            else:
+                messagebox.showinfo("Export", f"{res:,} records written to\n{path}", parent=self)
+        self.app.run_bg(work, done)
+
+    def _refresh_activity(self) -> None:
+        if self.act_tree is None:
+            return
+        from eldoctor.activity.export import describe
+        now = time.time()
+        if now - self._act_now_ts > 10:               # who is logged in: a process snapshot, not every second
+            self._act_now_ts = now
+            res = self.call("activity.now")
+            sess = [f"{s['user']} ({s.get('type') or ''} {s.get('terminal') or ''}"
+                    + (f" from {s['host']}" if s.get("host") else "") + ")" for s in res.get("sessions", [])]
+            self.act_now.set("Logged in now: " + (", ".join(sess) or "nobody") + "   |   people's running "
+                             f"applications: {sum(len(u['apps']) for u in res.get('users', []))}")
+        rows = self.call("activity.list", limit=500, **self._activity_params())
+        self._act_cache = {str(r["id"]): r for r in rows}
+        out = []
+        for r in rows:
+            d = describe(r)
+            tag = ("del",) if r["kind"] == "file_deleted" else ("inc",) if r["category"] == "incident" else \
+                ("dl",) if r["kind"] == "file_downloaded" else ()
+            out.append((str(r["id"]), (ts(r["ts"], "%m-%d %H:%M:%S"), d["kind"].replace("_", " "), d["user"],
+                                       d["process"], d["what"], d["how"], d["source"]), tag))
+        sync_tree(self.act_tree, out)
+
     # -------------------------------------------------------------- deploy
     def _tab_deploy(self, tab) -> None:
         from eldoctor.auth.users import DEPLOY_TARGETS
@@ -1579,7 +1697,7 @@ class MainView(ttk.Frame):
             fn = {"Dashboard": self._refresh_dashboard, "Processes": self._refresh_processes,
                   "Alerts": self._refresh_alerts, "Response log": self._refresh_actions,
                   "Approvals": self._refresh_approvals, "Blocks & quarantine": self._refresh_blocks,
-                  "Users & settings": self._refresh_users}.get(current)
+                  "User activity": self._refresh_activity, "Users & settings": self._refresh_users}.get(current)
             if fn:
                 fn()
             self._refresh_approval_badge()

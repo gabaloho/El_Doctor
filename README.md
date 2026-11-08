@@ -19,6 +19,11 @@ turns it into a small **endpoint security tool with SOAR-style playbooks**:
   authenticated API (Unix socket / Windows named pipe with OS peer credentials). Every permission is
   checked *inside the agent*; approvals, roles and the **hash-chained audit trail** are sealed with a
   key only the agent holds, and the audit trail is forwarded to your SIEM in real time (section 6b).
+* **records user activity for forensics and triage** (section 5b): who is logged in, which
+  applications each person runs, and which files they create, edit, delete, rename, open or download,
+  with *who did it* and *how we know*. The record survives shutdowns and reboots, finds files deleted
+  while El Doctor was not running, and **e-mails every data-wipe incident — the user responsible and
+  every affected file and folder — to the registered administrators**.
 * **generates deployments** for Windows desktop/server, Linux (systemd), Docker, Kubernetes
   (DaemonSet), AWS, Azure and GCP VMs.
 
@@ -69,6 +74,9 @@ eldoctor alerts | actions | rules | playbooks list | blocks list | quarantine li
 eldoctor audit | audit verify                # tamper-evident, signed audit trail + row ledger (admin)
 eldoctor audit verify-export audit.jsonl     # verify a SIEM / exported copy offline, no secret needed
 eldoctor whoami                              # your role + the OS identity the agent sees
+eldoctor activity now                        # who is logged in right now and what they are running
+eldoctor activity list --since 2h            # timeline: sessions, apps, files created/edited/deleted/opened/downloaded
+eldoctor activity export --out triage.csv    # forensic export (CSV or --format jsonl)
 eldoctor intel update                        # pull abuse.ch / Emerging Threats feeds
 eldoctor deploy                              # deployment wizard (or --target linux --out DIR)
 eldoctor notify-test                         # send a test alert to every channel
@@ -116,7 +124,9 @@ interpreter, set `ELDOCTOR_GUI_PYTHON=/path/to/python`; to turn this off, use `-
   step, and the evidence. You can kill the process or block its IP from there.
 * **Response log**, **Approvals** (Approve / Deny with expiry countdown; the tab title shows how many
   are waiting), **Threat intel & rules** (update abuse.ch / Emerging Threats feeds, add your own
-  indicators, browse rules and playbooks), **Blocks & quarantine** (unblock, restore), **Deploy**
+  indicators, browse rules and playbooks), **Blocks & quarantine** (unblock, restore), **User activity**
+  (who is logged in now; timeline of sessions, applications and files created / edited / deleted /
+  opened / downloaded with the user and *how we know*; filters; CSV export - analysts and admins), **Deploy**
   (pick Windows / Linux / Docker / Kubernetes / AWS / Azure / GCP and generate the bundle), **Users &
   settings** (roles, enable/disable users, test notifications, audit trail).
 * **Modes**: switch between monitor, interactive and enforce from the header (enforce needs admin).
@@ -135,7 +145,7 @@ interpreter, set `ELDOCTOR_GUI_PYTHON=/path/to/python`; to turn this off, use `-
   filters are kept. Your choice is remembered per user. You can also pass `--theme light|dark|system`
   or set `gui.theme` in config.yaml. Both palettes meet WCAG AA contrast (at least 4.5:1) for all
   text, and a test enforces this.
-* **Keyboard**: Ctrl+1…9 switch tabs, F5 refresh, Delete kills the selected process, Alt+A / Alt+D
+* **Keyboard**: Ctrl+1…9 and Ctrl+0 switch tabs, F5 refresh, Delete kills the selected process, Alt+A / Alt+D
   approve or deny, Ctrl+T light/dark, Ctrl+Q quit.
 
 Screenshots are omitted from the repository to avoid publishing demo account details.
@@ -291,13 +301,97 @@ Delivery is asynchronous, with retries and per-channel rate limiting, so a slow 
 containment. Playbook steps can target specific channels (`channels: [shuffle]`), which is how you
 hand incidents to an external SOAR.
 
+## 5b. User activity record (forensics & triage)
+
+While the agent runs it keeps a timeline of what people do on the machine. Investigators use it to answer
+*who was logged in, what did they run, which files did they touch, and who deleted what*.
+
+| Category | Recorded (`kind`) | Source |
+|---|---|---|
+| session | `session_start` / `session_end` (console, terminal, remote), `remote_login` (sshd), `privilege_use` (sudo + command) | OS session table (utmp / WTS), auth log, Windows 4624/4634, wtmp for logins while El Doctor was off |
+| process | `app_start` / `app_stop` (command line, parent, SHA-256, working folder, terminal, run time), `app_running` (inventory at start-up) | process poller, auditd / Sysmon exec events |
+| file | `file_created`, `file_modified` (edited), `file_deleted` (incl. **moved to the Trash**), `file_renamed` / moved, `file_opened`, `file_downloaded` (+ source URL and SHA-256), `bulk_access` | inotify (Linux, real time), folder scans (Windows / macOS, and at every start), auditd, Sysmon 11/23/26/15, Security 4663, GTK recently-used |
+| system | `system_boot`, `system_shutdown` (clean or not), `monitoring_gap`, `offline_changes`, `events_lost` | boot id + heartbeat kept in the database |
+| incident | `wipe_incident`, `evidence_deleted` | see below |
+
+**Who did it — and how we know.** inotify and folder scans say *what* changed, never *who*. Every file
+record therefore carries an `attribution`:
+
+| attribution | meaning |
+|---|---|
+| `kernel` | auditd (Linux) / Sysmon or the Security log (Windows) recorded the process and the user — including the **login user** (auid) behind `sudo` / `su`. Authoritative. |
+| `handle` | the process had the file open (open-files sample taken right after the event) |
+| `cmdline` | a running process named the file or a parent folder on its command line (`rm -rf ~/Documents`, `shred`, `curl -o`, `find . -delete`, `bash -c "…"`) |
+| `inferred` | no process evidence: the owner of the home folder who was logged in, or the only logged-in user — a lead, not proof |
+| `unknown` | nothing to go on (typically changes made while El Doctor was not running) |
+
+For authoritative attribution of deletions install the bundled auditd rules (the Linux installer does it:
+deletions and renames below `/home` and `/root`) or Sysmon with file events on Windows.
+
+**Survives shutdowns and reboots.** Records are committed to the SQLite database as they happen. They are
+sealed in the signed audit chain immediately for deletions, sessions, boots, incidents and downloads, and
+otherwise once a minute (`seal_interval`), which keeps the chain small. `eldoctor audit verify` reports any
+record that was edited, deleted or inserted behind the agent's back. Rows left unsealed by a crash are sealed
+at the next start and marked `recovered`. The last known state of the watched folders is also kept. At every start the
+folders are compared with it, so files **deleted while El Doctor was not running** (machine off, agent killed,
+disk mounted from another OS) are still found. They are recorded with `source: offline` and the time window in
+which it happened. Boots, clean and unclean shutdowns and monitoring gaps are recorded (an unclean gap in the same
+boot raises ED-ACT-005: the agent may have been killed). Logins during the gap are read back from wtmp.
+Sessions, privilege use, wipe reports, restarts and gaps also go to the audit trail, which is forwarded to your
+SIEM in real time. A copy survives even if the host is wiped.
+
+**Data wipes → e-mail to the registered admins.** When `activity.wipe.threshold` files or folders (default 50)
+disappear within `window` seconds (default 60), El Doctor
+
+1. raises **ED-ACT-001** (critical, T1485 / T1070.004) at once, naming the user and the process. When the process
+   is still running, playbook `pb-data-destruction` collects evidence and suspends it: *monitor* = recorded only,
+   *interactive* = after approval, *enforce* = immediately. Resume it if the deletion was legitimate.
+2. sends a short "wipe in progress" e-mail, then a **complete report** once the deletions stop. The report says
+   who (user, login user, process, command line, how each deletion was attributed), who was logged in, when,
+   how much (files, folders, bytes, Trash vs permanent) and the folders most affected. It has a **zipped CSV of
+   every deleted file and folder** attached.
+3. does the same at start-up for deletions found while it was off (**ED-ACT-002**). Deleting El Doctor's own
+   database, keys or logs raises **ED-ACT-003**. A downloaded file whose hash or name is in threat intel raises
+   **ED-ACT-004**.
+
+Recipients are the e-mail addresses of the **registered administrators** (active `admin` users whose account
+record passes the integrity check; a user row injected into the database is never a recipient), plus
+`activity.report.extra_recipients`. SMTP comes from `activity.report.smtp` or, if that is empty, from the first
+`email` channel under `notifications.channels`. Reports are written to a persistent outbox *before* sending and
+retried with back-off until delivered, across restarts and reboots. Check them with `eldoctor activity reports`;
+`--retry` sends pending ones now.
+
+```bash
+eldoctor activity now                                   # logged-in users + the applications each one runs
+eldoctor activity list --since 2h --user alice          # timeline (filters: --kind --category --path --search --pid)
+eldoctor activity list --kind file_deleted,file_downloaded --path /home/alice/Documents
+eldoctor activity sessions                              # current sessions + login/logout history
+eldoctor activity status                                # watched folders, backend, kernel telemetry, outbox
+eldoctor activity export --since 2025-06-01 --out triage.csv   # or --format jsonl (exports are audited)
+```
+
+Viewing or exporting the record needs the `forensics` permission (analyst, admin). Viewers cannot see
+people's file activity.
+
+Configuration: the `activity:` section of `config.yaml`. Defaults:
+
+* watched folders: every home folder when the agent is privileged (`/home`, `/root`, `C:\Users`), otherwise your own.
+* excluded: caches, browser profiles, `node_modules`, VCS metadata, `AppData`. The Trash is watched, because moving
+  a file there is a deletion by the user.
+* opens are de-duplicated (10 min) and rate-limited (300 per minute, then one `bulk_access` summary).
+* `retention_days: 0` keeps everything (when set, whole sealed batches are pruned).
+* `jsonl: activity.jsonl` writes a JSON-lines copy for Filebeat / Vector.
+
+Recording people's activity is monitoring. Deploy it under your organisation's acceptable-use /
+monitoring policy.
+
 ## 6. Users and roles
 
 | Role | Can |
 |---|---|
 | viewer | view alerts / actions / rules (default for self-registration) |
-| analyst | + run the agent (monitor/interactive), approve, manual response, intel updates |
-| admin | + enforce mode, user management, deployment bundles, quarantine restore, unblock, audit trail |
+| analyst | + run the agent (monitor/interactive), approve, manual response, intel updates, user-activity record |
+| admin | + enforce mode, user management, deployment bundles, quarantine restore, unblock, audit trail; receives data-wipe reports by e-mail |
 
 * Passwords use PBKDF2-SHA256 (600k iterations), need at least 10 characters from 3 character
   classes, and 5 failures lock the account for 5 minutes.
@@ -487,7 +581,7 @@ Production-readiness review and roadmap: [`docs/PRODUCTION_READINESS.md`](docs/P
 
 
 ```bash
-python -m pytest             # 204 tests incl. GUI, appearance + GUI-runtime tests (Python 3.14; GUI tests skip without Tk): Sigma engine, detections, guards, real kill/suspend/quarantine,
+python -m pytest             # 230 tests (39 for the user-activity record; 2 GUI tests skip without Tk) incl. GUI, appearance + GUI-runtime tests (Python 3.14; GUI tests skip without Tk): Sigma engine, detections, guards, real kill/suspend/quarantine,
                              # playbook modes & approvals, notifications over real HTTP/SMTP/UDP,
                              # auth/RBAC, deployment bundles, CLI gate, agent end-to-end, TUI in a pty,
                              # agent API (RBAC per method and role, JWT binding/revocation, Unix socket peer
@@ -543,6 +637,15 @@ of automatic kills. In short:
   full exec coverage. The auditd parser is unit-tested, not run live (needs root).
 * The Sigma engine was tested with the bundled rules and the spec constructs, not yet against the
   full SigmaHQ repository.
+* User activity record: inotify, the start-up folder comparison, `cmdline` / `handle` attribution, wipe
+  incidents and the admin e-mail (over a real SMTP conversation) were run live on Linux. The auditd file
+  records and the Sysmon / 4663 file events are parsed from real-format samples in tests, not captured live
+  (no root / no Windows here). The Windows polling backend and the Mark-of-the-Web reader were not run on Windows.
+* Without auditd / Sysmon, a command that lives for milliseconds (`rm file`) can finish between two process
+  samples. Its deletion is then recorded as `inferred` or `unknown`, never silently attributed.
+  `rm -rf` of a large folder, `shred`, and any `sh -c "..."` wrapper are long enough to be caught.
+* A folder moved *out* of the watched folders is one `file_deleted` record (`moved_out`,
+  `contained_entries`), not one per file. Files created and deleted again within a second are not recorded.
 
 ## License
 

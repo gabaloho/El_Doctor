@@ -180,3 +180,52 @@ audit:                          # tamper-evident audit trail (hash chain + agent
     # - {type: syslog, host: 10.0.0.5, port: 514, protocol: tcp, format: rfc5424}     # Graylog / rsyslog
     # - {type: syslog, host: wazuh.example.com, port: 514, protocol: udp, format: json}
     # - {type: webhook, url_env: ELDOCTOR_AUDIT_WEBHOOK, secret_env: ELDOCTOR_WEBHOOK_SECRET}   # Splunk HEC, Elastic...
+
+activity:                       # user-activity record for forensics & triage (sessions, apps, files, boots, wipes)
+  enabled: true
+  retention_days: 0             # 0 = keep forever (whole sealed batches are pruned when > 0)
+  heartbeat_seconds: 30         # last-sign-of-life stamp: dates shutdowns / crashes / monitoring gaps
+  seal_interval: 60             # routine records are committed at once and sealed in the signed audit chain once
+                                # per interval (deletions, sessions, boots, incidents, downloads: immediately)
+  attribution_window: 300       # seconds a process stays a candidate for "who changed this file"
+  jsonl: ''                     # e.g. activity.jsonl: JSON-lines copy in the data folder for Filebeat / Vector / UF
+  wtmp: /var/log/wtmp           # Linux: logins that happened while El Doctor was not running
+  processes:
+    enabled: true
+    scope: users                # users = people's accounts (+ root / Administrator) | all = every account
+    record_inventory: true      # record the applications already running when the agent starts
+    exclude_names: []
+  files:
+    enabled: true
+    backend: auto               # auto (inotify on Linux, else polling) | inotify | poll
+    paths: auto                 # auto = every home folder when privileged (/home, /root, C:\Users), else your own
+    record_opens: true          # record files opened (rate-limited and de-duplicated, see below)
+    open_dedupe_seconds: 600
+    max_open_events_per_minute: 300   # beyond that: one bulk_access summary (indexers, backups, mass reading)
+    open_handles_interval: 30   # seconds between samples of files held open by people's processes (attribution)
+    poll_interval: 60           # polling backend: seconds between folder scans
+    merge_delay: 0.7            # seconds events are held to merge create+write, atomic saves, kernel records
+    download_dirs: [Downloads, Download, Téléchargements, Descargas, Scaricati, Transferências]
+    hash_max_mb: 50             # SHA-256 of downloaded files up to this size (checked against threat intel)
+    max_files: 500000           # folder-scan limit (start-up comparison); deletions are not inferred beyond it
+    max_watches: 100000         # inotify folders; raise fs.inotify.max_user_watches for very large homes
+    never_watch: []             # extra folders never watched (El Doctor's own folders are always excluded)
+    exclude: [.cache, .ccache, .npm, .yarn, .pnpm-store, .cargo, .rustup, .gradle, .m2, .nuget, .ivy2, .sbt,
+              .conda, .pyenv, .nvm, .local, .var, snap, .steam, .wine, .mozilla, .thunderbird, .config, .vscode,
+              .vscode-server, .cursor, .java, .dotnet, .android, .gvfs, .dbus, node_modules, __pycache__, .git,
+              .hg, .svn, .venv, venv, site-packages, .tox, .mypy_cache, .pytest_cache, .ruff_cache,
+              .ipynb_checkpoints, .terraform, AppData, 'Application Data', 'Local Settings', '$Recycle.Bin']
+    include: [.local/share/Trash/files, '*/.local/share/Trash/files']   # Trash moves = deletions by the user
+  wipe:                         # mass deletion = data-wipe incident (ED-ACT-001), reported to the admins
+    enabled: true
+    threshold: 50               # files/folders deleted ...
+    window: 60                  # ... within N seconds
+    quiet: 20                   # incident closes after N seconds without deletions -> full report e-mailed
+  report:                       # e-mail to the registered administrators (users with role admin)
+    email_admins: true
+    extra_recipients: []        # more addresses (e.g. the SOC mailbox)
+    smtp: {}                    # {smtp_host, smtp_port, starttls, ssl, username, password_env, from};
+                                # empty = use the first 'email' channel under notifications.channels
+    max_attachment_mb: 10       # zipped CSV of every affected file; larger lists are truncated (use export)
+    body_rows: 100
+    retry_max_seconds: 21600    # undelivered reports are retried (across restarts) with back-off up to this

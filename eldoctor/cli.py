@@ -800,6 +800,130 @@ def _audit_api(args, c) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- user activity (forensics)
+def parse_when(v: Optional[str]) -> float:
+    """'2h', '30m', '3d', '45s', epoch seconds, or a local date/time ('2025-01-31', '2025-01-31 14:00')."""
+    if not v:
+        return 0.0
+    v = str(v).strip()
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    if v[-1:].lower() in units and v[:-1].replace(".", "", 1).isdigit():
+        return time.time() - float(v[:-1]) * units[v[-1].lower()]
+    try:
+        return float(v)
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+        try:
+            return time.mktime(time.strptime(v, fmt))
+        except ValueError:
+            continue
+    raise SystemExit(f"error: cannot understand time {v!r} (use 2h, 30m, 3d, epoch seconds or 'YYYY-MM-DD HH:MM')")
+
+
+def _activity_params(args) -> Dict[str, Any]:
+    return {k: v for k, v in {"since": parse_when(args.since), "until": parse_when(args.until), "user": args.user,
+                              "kind": args.kind, "category": args.category, "path": args.path, "q": args.search,
+                              "pid": args.pid}.items() if v}
+
+
+@api_command()
+def cmd_activity(args, c) -> int:
+    from eldoctor.activity.export import describe as _activity_line
+    sub = args.act_cmd or "list"
+    if sub == "list":
+        rows = c.call("activity.list", limit=args.limit, **_activity_params(args))
+        if args.json:
+            print(json.dumps(rows, indent=2, default=str))
+            return 0
+        _print_table([_activity_line(r) for r in reversed(rows)],
+                     ["id", "time", "kind", "user", "process", "what", "how", "source"],
+                     {"what": 90, "user": 24, "process": 22})
+        return 0
+    if sub == "now":
+        res = c.call("activity.now", all=args.all)
+        print(f"{res['host']}  {_ts(res['time'])}  (booted {_ts(res['boot_time'])})")
+        print("Logged in now: " + (", ".join(res["logged_in"]) or "nobody (no interactive session)"))
+        for u in res["users"]:
+            # people with a session: everything they run; others: only what runs on a terminal (unless --all)
+            apps = u["apps"] if (args.all or u["sessions"]) else [a for a in u["apps"] if a.get("terminal")]
+            shown = apps[: args.limit]
+            hidden = len(u["apps"]) - len(shown)
+            print(f"\n== {u['user']}" + ("" if u["sessions"] else "  (no login session)"))
+            for s in u["sessions"]:
+                print(f"   session  {s.get('type', ''):<9} {s.get('terminal') or '-':<8} "
+                      f"{('from ' + s['host']) if s.get('host') else '':<22} since {_ts(s.get('started'))}")
+            for a in shown:
+                print(f"   app      {a['pid']:>7}  {a['name'][:22]:<22} since {_ts(a['started'])}  "
+                      f"{a.get('terminal') or '':<6} {a['cmdline'][:90]}")
+            if hidden:
+                print(f"   ({hidden} more process(es) not shown - use --all / --limit N)")
+        return 0
+    if sub == "sessions":
+        res = c.call("activity.sessions", limit=args.limit, user=args.user)
+        print("Current sessions:")
+        _print_table([{"user": s["user"], "type": s.get("type"), "terminal": s.get("terminal"), "host": s.get("host"),
+                       "since": _ts(s.get("started"))} for s in res["current"]],
+                     ["user", "type", "terminal", "host", "since"])
+        print("\nHistory:")
+        _print_table([_activity_line(r) for r in reversed(res["history"])], ["time", "kind", "user", "what", "source"],
+                     {"what": 70})
+        return 0
+    if sub == "status":
+        st = c.call("activity.status")
+        if args.json:
+            print(json.dumps(st, indent=2, default=str))
+            return 0
+        print(f"activity recorder: {'running' if st.get('started') else 'not running in the agent'}"
+              + (f", backend {st.get('backend')}, {st.get('watches', 0)} folders watched" if st.get("started") else ""))
+        if st.get("roots"):
+            print("watched: " + ", ".join(st["roots"]))
+        idx = st.get("index") or {}
+        print(f"last known state: {idx.get('entries', 0):,} entries ({idx.get('folders', 0):,} folders)  |  "
+              f"records: {st.get('total_records', 0):,}")
+        if st.get("kernel_file_telemetry"):
+            print("kernel file telemetry (auditd / Sysmon): yes - deletions carry the real user and login user")
+        if st.get("watch_limit_hit"):
+            print(f"warning: inotify watch limit reached, {st.get('unwatched_folders')} folders not watched")
+        state = st.get("state") or {}
+        if state:
+            print(f"last heartbeat: {_ts(state.get('heartbeat'))}  clean stop last time: {state.get('clean_stop')}")
+        if st.get("last_scan"):
+            ls = st["last_scan"]
+            print(f"last folder comparison ({ls.get('source')}): {ls.get('counts')}")
+        rep = st.get("reports") or {}
+        print(f"admin reports: outbox {st.get('outbox') or {}}; SMTP configured: {rep.get('smtp_configured', '?')}; "
+              f"admin recipients: {rep.get('recipients', '?')}")
+        if st.get("open_incident"):
+            print(f"OPEN DATA-WIPE INCIDENT: {st['open_incident']}")
+        for e in st.get("errors") or []:
+            print(f"  note: {e}")
+        return 0
+    if sub == "reports":
+        if args.retry:
+            res = c.call("activity.reports_retry")
+            for r in res["results"]:
+                print(f"{r['id']}: {r['status']} {r['error']}")
+            if not res["smtp_configured"]:
+                print("No SMTP server configured: set activity.report.smtp or add an 'email' channel under "
+                      "notifications.channels, then retry.")
+            return 0
+        rows = c.call("activity.reports", limit=args.limit)
+        for r in rows:
+            r["time"] = _ts(r["ts"])
+            r["sent"] = _ts(r["sent_ts"])
+        _print_table(rows, ["id", "time", "kind", "status", "attempts", "sent", "recipients", "subject", "last_error"],
+                     {"subject": 70, "last_error": 60})
+        return 0
+    if sub == "export":
+        from eldoctor.activity.export import export
+        out = Path(args.out).resolve()
+        n = export(c.call, str(out), _activity_params(args), args.format)
+        print(f"exported {n:,} records to {out}")
+        return 0
+    return 1
+
+
 def cmd_default(args) -> int:
     """`eldoctor` with no command: register if needed, log in, open the console."""
     from eldoctor.api.client import ApiError
@@ -950,6 +1074,39 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_argument("--local", action="store_true", help="show the config file as loaded by this process instead")
     cfsub.add_parser("init").add_argument("--force", action="store_true")
     cf.set_defaults(func=cmd_config)
+
+    ac2 = sub.add_parser("activity", help="forensics: who logged in, which apps ran, which files were created / "
+                                          "edited / deleted / opened / downloaded (analyst, admin)")
+    ac2sub = ac2.add_subparsers(dest="act_cmd")
+
+    def act_filters(sp):
+        sp.add_argument("--since", help="2h, 30m, 3d, epoch or 'YYYY-MM-DD HH:MM'")
+        sp.add_argument("--until")
+        sp.add_argument("--user", help="OS user name")
+        sp.add_argument("--kind", help="e.g. file_deleted,file_downloaded,session_start,app_start (comma-separated)")
+        sp.add_argument("--category", help="session, process, file, system, incident (comma-separated)")
+        sp.add_argument("--path", help="path prefix (also matches rename targets)")
+        sp.add_argument("--search", help="substring in path, process, user or details")
+        sp.add_argument("--pid", type=int)
+    for sp in (ac2, ac2sub.add_parser("list", help="timeline (default)")):
+        act_filters(sp)
+        sp.add_argument("--limit", type=int, default=100)
+        sp.add_argument("--json", action="store_true")
+    an = ac2sub.add_parser("now", help="who is logged in and what they are running")
+    an.add_argument("--all", action="store_true", help="service accounts too")
+    an.add_argument("--limit", type=int, default=40)
+    asn = ac2sub.add_parser("sessions", help="current sessions + login/logout history")
+    asn.add_argument("--limit", type=int, default=50); asn.add_argument("--user")
+    ast = ac2sub.add_parser("status", help="recorder status: watched folders, backend, reports")
+    ast.add_argument("--json", action="store_true")
+    arp = ac2sub.add_parser("reports", help="reports e-mailed to the registered admins (outbox)")
+    arp.add_argument("--limit", type=int, default=30)
+    arp.add_argument("--retry", action="store_true", help="try to deliver pending reports now")
+    aex = ac2sub.add_parser("export", help="export the record for triage (CSV or JSON lines)")
+    act_filters(aex)
+    aex.add_argument("--out", required=True)
+    aex.add_argument("--format", choices=["csv", "jsonl"], default="csv")
+    ac2.set_defaults(func=cmd_activity, act_cmd=None)
 
     au = sub.add_parser("audit", help="tamper-evident audit trail (admin): list | verify | verify-export FILE")
     au.add_argument("--limit", type=int, default=50)
