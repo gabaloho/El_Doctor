@@ -1,0 +1,51 @@
+# Lab configuration used for the sandbox demonstration (tight thresholds so tests run fast).
+agent:
+  interval: 1.0
+  mode: enforce
+  approval_timeout: 120
+thresholds:
+  process_cpu: 80
+  process_cpu_duration: 6
+  process_memory: 1.5           # ~240 MB on this 16 GB sandbox
+  process_memory_duration: 3
+  spawn_storm_children: 40
+  spawn_storm_window: 30
+detection:
+  alert_cooldown: 60
+logs:
+  brute_force: {threshold: 5, window: 60}
+notifications:
+  min_severity: medium
+  channels:
+    - {type: console}
+    - {type: jsonl, path: alerts.jsonl}
+    - {type: email, smtp_host: 127.0.0.1, smtp_port: 2525, starttls: false, from: eldoctor@lab.local,
+       to: [soc@lab.local], min_severity: high}
+    - {type: slack, url: "http://127.0.0.1:8099/slack"}
+    - {type: teams, url: "http://127.0.0.1:8099/teams", min_severity: high}
+    - {type: discord, url: "http://127.0.0.1:8099/discord", min_severity: high}
+    - {type: webhook, name: shuffle, url: "http://127.0.0.1:8099/shuffle", secret_env: ELDOCTOR_WEBHOOK_SECRET}
+    - {type: webhook, name: n8n, url: "http://127.0.0.1:8099/n8n", min_severity: critical}
+    - {type: webhook, name: tines, url: "http://127.0.0.1:8099/tines", min_severity: critical}
+    - {type: thehive, url: "http://127.0.0.1:8099/thehive", api_key_env: ELDOCTOR_THEHIVE_KEY, version: 5,
+       min_severity: high}
+    - {type: syslog, host: 127.0.0.1, port: 5515, protocol: udp, format: cef}
+intel:
+  feeds:
+    - name: lab_feodotracker_ips          # same format as https://feodotracker.abuse.ch/downloads/ipblocklist.txt
+      url: http://127.0.0.1:8099/ipblocklist.txt
+      type: ip
+      severity: critical
+      description: Botnet C2 (lab copy of Feodo Tracker format)
+    - name: lab_malwarebazaar_sha256      # same format as https://bazaar.abuse.ch/export/txt/sha256/recent/
+      url: http://127.0.0.1:8099/sha256_recent.txt
+      type: sha256
+      severity: critical
+      description: Malware sample (lab copy of MalwareBazaar format)
+# The sandbox's own command runner executes from an anonymous memfd (fileless) - El Doctor rightly flags it
+# (ED-PROC-005). It is a known-good tool here, so allow-list its exact SHA-256 (a path/name allow-list would
+# also exempt real malware that names its memfd the same way): alerts stay, response actions are refused.
+safety:
+  max_actions_per_window: 40    # the lab fires ~25 containments in 3 minutes; production default is 10
+  allowlist:
+    hashes: [1b4fed241946a6460b0a97e99cd511eb626e5e2b48d3b51a2f5495cbc859fdc3]

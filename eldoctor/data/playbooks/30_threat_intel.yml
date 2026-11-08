@@ -1,0 +1,19 @@
+id: pb-threat-intel-hit
+name: Threat-intel match (hash / C2 IP / YARA)
+description: >
+  The running binary hash, a remote IP or a YARA signature matched threat intelligence.
+  Suspend, collect evidence, quarantine the file, kill the process and block the C2 address.
+priority: 30
+exclusive: true
+trigger:
+  rule_ids: [ED-IOC-001, ED-IOC-002, ED-IOC-003, ED-IOC-004, ED-YARA-001]
+  min_severity: high
+steps:
+  - {action: suspend, auto: true, when: [{field: alert.process.pid, op: exists}]}
+  - {action: collect_forensics}
+  - {action: quarantine, when: [{field: alert.process.exe, op: exists}]}
+  - {action: kill, tree: true, when: [{field: alert.process.pid, op: exists}]}
+  - action: block_ip
+    ip: "{{ alert.remote_ip }}"
+    when: [{field: alert.remote_ip, op: exists}]
+  - {action: notify, channels: [all], message: "Threat-intel playbook finished."}

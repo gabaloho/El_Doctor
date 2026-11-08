@@ -1,0 +1,17 @@
+title: Sudo Used to Read Credential Files
+id: 1e2f3a4b-5c6d-4e7f-9081-92a3b4c5d611
+status: stable
+description: sudo log entry showing access to /etc/shadow or private SSH keys.
+author: El Doctor
+tags: [attack.credential-access, attack.t1003.008, attack.privilege-escalation, attack.t1548.003]
+logsource: {product: linux, service: auth}
+detection:
+  sel_sudo:
+    - 'COMMAND='
+  sel_target:
+    - '/etc/shadow'
+    - '/etc/gshadow'
+    - '/.ssh/id_rsa'
+    - '/.ssh/id_ed25519'
+  condition: sel_sudo and sel_target
+level: high

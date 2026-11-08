@@ -1,0 +1,14 @@
+title: Suspicious Windows Service Installed
+id: 8f90a1b2-c3d4-46e7-87f8-a9b0c1d2e318
+status: stable
+description: Event 7045 where the service binary lives in a user-writable path or runs a shell/PowerShell.
+author: El Doctor
+tags: [attack.persistence, attack.t1543.003]
+logsource: {product: windows, service: system}
+detection:
+  selection:
+    EventID: 7045
+  sel_path:
+    ImagePath|contains: ['\AppData\', '\Temp\', '\Users\Public\', 'powershell', 'cmd.exe /c', '%COMSPEC%']
+  condition: selection and sel_path
+level: high

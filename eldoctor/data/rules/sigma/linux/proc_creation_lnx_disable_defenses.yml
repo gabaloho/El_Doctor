@@ -1,0 +1,25 @@
+title: Security Controls Disabled on Linux
+id: 9f8e7d6c-5b4a-4392-8170-6f5e4d3c2b06
+status: stable
+description: Disabling firewall, SELinux/AppArmor or audit daemon - frequent step before miner or ransomware deployment.
+author: El Doctor
+tags: [attack.defense-evasion, attack.t1562.001, attack.t1562.004]
+logsource: {category: process_creation, product: linux}
+detection:
+  selection:
+    CommandLine|contains:
+      - 'setenforce 0'
+      - 'ufw disable'
+      - 'iptables -F'
+      - 'iptables --flush'
+      - 'nft flush ruleset'
+      - 'systemctl stop auditd'
+      - 'systemctl disable auditd'
+      - 'service auditd stop'
+      - 'systemctl stop apparmor'
+      - 'systemctl stop firewalld'
+      - 'systemctl disable firewalld'
+      - 'auditctl -D'
+      - 'auditctl -e 0'
+  condition: selection
+level: high

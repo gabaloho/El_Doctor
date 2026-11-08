@@ -1,0 +1,22 @@
+# El Doctor bundled indicators. Real feeds are added with `eldoctor intel update`.
+type,value,severity,description,mitre,source
+sha256,275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f,critical,EICAR anti-malware test file,T1204.002,eicar
+md5,44d88612fea8a8f36de82e1278abb02f,critical,EICAR anti-malware test file,T1204.002,eicar
+sha1,3395856ce81f2b7382dee72602f798b642f14140,critical,EICAR anti-malware test file,T1204.002,eicar
+filename,xmrig,critical,XMRig Monero miner,T1496,miner-names
+filename,xmr-stak,critical,XMR-Stak miner,T1496,miner-names
+filename,minerd,critical,cpuminer/minerd,T1496,miner-names
+filename,cpuminer,critical,cpuminer,T1496,miner-names
+filename,kdevtmpfsi,critical,Kinsing cryptojacking malware miner,T1496,kinsing
+filename,kinsing,critical,Kinsing cryptojacking malware loader,T1496;T1105,kinsing
+filename,xmrigdaemon,critical,XMRig daemon variant,T1496,miner-names
+filename,tsunami,high,Tsunami/Kaiten IRC bot,T1071,linux-bots
+filename,mimikatz,critical,Mimikatz credential dumper,T1003,windows-tools
+filename,mimikatz.exe,critical,Mimikatz credential dumper,T1003,windows-tools
+filename,procdump.exe,medium,Sysinternals ProcDump (LSASS dumping risk),T1003,windows-tools
+domain,pool.minexmr.com,high,Monero mining pool,T1496,mining-pools
+domain,xmr.pool.minergate.com,high,MinerGate mining pool,T1496,mining-pools
+domain,pool.supportxmr.com,high,SupportXMR mining pool,T1496,mining-pools
+domain,gulf.moneroocean.stream,high,MoneroOcean mining pool,T1496,mining-pools
+domain,xmr-eu1.nanopool.org,high,Nanopool Monero pool,T1496,mining-pools
+domain,pastebin.com,low,Paste site often used for payload staging (informational),T1105,staging

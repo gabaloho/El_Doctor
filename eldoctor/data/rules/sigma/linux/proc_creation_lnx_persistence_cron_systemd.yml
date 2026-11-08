@@ -1,0 +1,14 @@
+title: Persistence via Cron or Systemd From Command Line
+id: 7c8d9e0f-1a2b-4c3d-94e5-f6a7b8c9d009
+status: experimental
+description: Writing cron entries or new systemd units from a one-liner (echo/curl into cron.d, crontab piping).
+author: El Doctor
+tags: [attack.persistence, attack.t1053.003, attack.t1543.002]
+logsource: {category: process_creation, product: linux}
+detection:
+  sel_cron:
+    CommandLine|re: '(echo|printf|curl|wget).*(>|>>|tee)\s*(/etc/cron|/var/spool/cron)|crontab\s+-\s*$|\|\s*crontab\s+-'
+  sel_systemd:
+    CommandLine|re: '(echo|printf|cat|cp|tee).*(/etc/systemd/system/|~/.config/systemd/user/)\S+\.service'
+  condition: 1 of sel_*
+level: medium

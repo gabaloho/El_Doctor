@@ -1,0 +1,19 @@
+title: Encoded or Obfuscated PowerShell Command
+id: 2f3a4b5c-6d7e-4f80-a192-a3b4c5d6e712
+status: stable
+description: PowerShell launched with an encoded command, hidden window + download cradle, or IEX of remote content.
+author: El Doctor
+tags: [attack.execution, attack.t1059.001, attack.defense-evasion, attack.t1027]
+logsource: {category: process_creation, product: windows}
+detection:
+  sel_img:
+    - Image|endswith: ['\powershell.exe', '\pwsh.exe']
+    - OriginalFileName: ['PowerShell.EXE', 'pwsh.dll', 'powershell.exe', 'pwsh.exe']
+  sel_enc:
+    CommandLine|windash|contains: [' -e ', ' -en ', ' -enc ', ' -enco', ' -encodedcommand ']
+  sel_cradle:
+    CommandLine|contains: ['FromBase64String', 'IEX (New-Object', 'IEX(New-Object', 'Invoke-Expression (New-Object',
+                           'DownloadString(', 'DownloadFile(', 'Net.WebClient', 'Invoke-WebRequest', '-w hidden', '-windowstyle hidden']
+  condition: sel_img and (sel_enc or sel_cradle)
+falsepositives: [Some management agents (SCCM, Intune) - allowlist their parent process]
+level: high

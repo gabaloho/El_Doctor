@@ -1,0 +1,20 @@
+id: pb-reverse-shell
+name: Reverse shell / interactive C2 kill
+description: >
+  A shell holding a TCP connection or a reverse-shell one-liner. Capture evidence (live connections,
+  open files), kill the whole process tree and block the remote address.
+priority: 20
+exclusive: true
+trigger:
+  rule_ids: [ED-NET-001, "SIGMA:6b3f0a52-*"]
+  min_severity: high
+conditions:
+  - {field: alert.process.pid, op: exists}
+steps:
+  - {action: suspend, auto: true}
+  - {action: collect_forensics}
+  - {action: kill, tree: true, force: true}      # interactive shells ignore SIGTERM
+  - action: block_ip
+    ip: "{{ alert.remote_ip }}"
+    when: [{field: alert.remote_ip, op: exists}]
+  - {action: notify, channels: [all], message: "Reverse shell playbook finished."}

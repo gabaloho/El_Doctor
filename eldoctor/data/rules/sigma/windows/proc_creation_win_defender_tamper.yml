@@ -1,0 +1,17 @@
+title: Microsoft Defender or Event Log Tampering
+id: 6d7e8f90-a1b2-44c5-a5d6-e7f8a9b0c116
+status: stable
+description: Disabling Defender real-time protection, adding broad exclusions or clearing event logs.
+author: El Doctor
+tags: [attack.defense-evasion, attack.t1562.001, attack.t1070.001]
+logsource: {category: process_creation, product: windows}
+detection:
+  sel_mp:
+    CommandLine|contains: ['DisableRealtimeMonitoring $true', 'DisableRealtimeMonitoring 1', 'Add-MpPreference -ExclusionPath C:\',
+                           'DisableBehaviorMonitoring $true', 'DisableIOAVProtection $true']
+  sel_sc:
+    CommandLine|contains: ['sc stop WinDefend', 'sc config WinDefend start= disabled', 'net stop WinDefend']
+  sel_wevtutil:
+    CommandLine|contains: ['wevtutil cl ', 'wevtutil.exe cl ', 'Clear-EventLog', 'Remove-EventLog']
+  condition: 1 of sel_*
+level: high

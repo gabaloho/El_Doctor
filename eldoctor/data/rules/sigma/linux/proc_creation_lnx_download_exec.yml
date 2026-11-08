@@ -1,0 +1,15 @@
+title: Download Piped Directly Into a Shell
+id: 2f9b8a4e-8d8e-4d62-9c4a-1e2c3b4d5e02
+status: stable
+description: curl/wget output piped into a shell interpreter - typical of droppers, cryptojacking and botnet installers.
+author: El Doctor
+tags: [attack.command-and-control, attack.t1105, attack.execution, attack.t1059.004]
+logsource: {category: process_creation, product: linux}
+detection:
+  sel_dl:
+    CommandLine|contains: ['curl ', 'wget ', 'fetch ', 'busybox wget']
+  sel_pipe:
+    CommandLine|re: '\|\s*(sudo\s+)?(\S*/)?(ba|da|z|k)?sh\b|\|\s*(sudo\s+)?(\S*/)?(python[23]?|perl|ruby)\b'
+  condition: sel_dl and sel_pipe
+falsepositives: [Official installers such as rustup or Homebrew (add them to the allowlist)]
+level: high

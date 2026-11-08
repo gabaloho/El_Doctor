@@ -1,0 +1,12 @@
+id: pb-blocked-connection
+name: Enforce El Doctor block list
+description: A process connected to an IP that El Doctor blocked (app-level enforcement when no firewall access).
+priority: 70
+exclusive: true
+trigger:
+  rule_ids: [ED-NET-003]
+conditions:
+  - {field: alert.process.pid, op: exists}
+steps:
+  - {action: kill}
+  - {action: notify, channels: [all]}

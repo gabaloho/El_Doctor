@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eldoctor"
+version = "2.0.0"
+description = "El Doctor - system monitoring, threat detection (Sigma, IOC, YARA, MITRE ATT&CK) and SOAR-style automated response"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = [
+  "psutil>=5.9",
+  "PyYAML>=6.0",
+  "cryptography>=41",
+  "windows-curses>=2.3; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+yara = ["yara-python>=4.3"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+eldoctor = "eldoctor.cli:main"
+
+[project.gui-scripts]
+eldoctor-gui = "eldoctor.ui.launch:main"      # windowed launcher: no console window on Windows
+
+[tool.setuptools.packages.find]
+include = ["eldoctor*"]
+
+[tool.setuptools.package-data]
+eldoctor = ["data/*.yaml", "data/playbooks/*.yml", "data/rules/sigma/*/*.yml", "data/rules/yara/*.yar", "data/iocs/*.csv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

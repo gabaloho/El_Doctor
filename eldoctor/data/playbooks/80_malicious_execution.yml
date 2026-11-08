@@ -1,0 +1,18 @@
+id: pb-malicious-execution
+name: High-confidence malicious execution
+description: >
+  High/critical Sigma or behavioural detections tied to a process (download-and-execute, log tampering,
+  defence evasion, deleted binaries, masquerading, web shells). Evidence first, then kill after approval
+  (interactive) or automatically (enforce).
+priority: 80
+exclusive: true
+trigger:
+  sources: [sigma, heuristic]
+  min_severity: high
+conditions:
+  - {field: alert.process.pid, op: exists}
+  - {field: alert.rule_id, op: not_in, value: [ED-RES-001, ED-RES-002, ED-RES-003]}
+steps:
+  - {action: collect_forensics}
+  - {action: kill, tree: true}
+  - {action: notify, channels: [all]}

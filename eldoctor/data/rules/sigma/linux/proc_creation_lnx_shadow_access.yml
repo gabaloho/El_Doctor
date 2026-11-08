@@ -1,0 +1,12 @@
+title: Read of /etc/shadow via Command Line Utility
+id: 3e4f5a6b-7c8d-49e0-a1b2-c3d4e5f6a707
+status: stable
+description: Reading password hashes with common utilities (credential access).
+author: El Doctor
+tags: [attack.credential-access, attack.t1003.008]
+logsource: {category: process_creation, product: linux}
+detection:
+  selection:
+    CommandLine|re: '(cat|less|more|head|tail|cp|scp|base64|xxd|strings|vi|vim|nano)\s+(\S+\s+)*/etc/(g)?shadow'
+  condition: selection
+level: high

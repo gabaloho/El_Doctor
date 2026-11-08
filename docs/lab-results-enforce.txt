@@ -1,0 +1,119 @@
+prepared /tmp/eldoctor-sim: sleeper, payload-ioc.bin (sha256 fa714f65657ea153...), lab feeds
+Registered 'alice' with role 'admin' (use case: soc, deploy target: linux).
+Logged in as alice (admin); session valid 12h.
+lab_feodotracker_ips           OK 3 indicators
+lab_malwarebazaar_sha256       OK 2 indicators
+Python 3.12.3
+El Doctor 2.0.0 agent | mode=enforce | privileged=False | sigma=18 iocs=25 yara=off playbooks=9
+log sources: file:/tmp/eldoctor-sim/auth.log, syslog:udp/127.0.0.1:5514
+notification channels: console, jsonl, email, slack, teams, discord, shuffle, n8n, tines, thehive, syslog
+local API: /tmp/ed_lab/api.sock  |  audit forwarding: syslog:127.0.0.1:5515/udp/cef, jsonl:audit.jsonl
+[PASS] cpu_hog               detect=yes t=9.4s outcome=terminated (SIGTERM)   rules=ED-RES-001
+[PASS] memory_hog            detect=yes t=17.7s outcome=terminated (SIGTERM)   rules=ED-RES-002
+[PASS] cryptominer           detect=yes t=0.7s outcome=terminated (SIGTERM)   rules=ED-IOC-003,ED-IOC-004,ED-PROC-001,SIGMA:8e7d6c5b
+[PASS] reverse_shell_bash    detect=yes t=0.7s outcome=terminated (SIGKILL)   rules=ED-NET-001,SIGMA:6b3f0a52
+[PASS] reverse_shell_python  detect=yes t=0.2s outcome=terminated (SIGKILL)   rules=SIGMA:6b3f0a52
+[PASS] download_exec         detect=yes t=0.5s outcome=terminated (SIGTERM)   rules=SIGMA:2f9b8a4e
+[PASS] fork_storm            detect=yes t=0.8s outcome=terminated (SIGKILL)   rules=ED-RES-003
+[PASS] deleted_binary        detect=yes t=0.7s outcome=terminated (SIGTERM)   rules=ED-PROC-001,ED-PROC-002
+[PASS] masquerade            detect=yes t=0.9s outcome=terminated (SIGTERM)   rules=ED-PROC-001,ED-PROC-003
+[PASS] ioc_hash              detect=yes t=0.9s outcome=terminated (SIGTERM)   rules=ED-IOC-001,ED-PROC-001
+[PASS] c2_beacon             detect=yes t=0.7s outcome=terminated (SIGTERM)   rules=ED-IOC-002
+[PASS] log_tamper            detect=yes t=0.7s outcome=terminated (SIGTERM)   rules=SIGMA:1a2b3c4d
+[PASS] ssh_bruteforce        detect=yes t=0.9s outcome=n/a (log event)        rules=ED-LOG-001,ED-LOG-002,SIGMA:0d1e2f3a
+[PASS] auth_log_file         detect=yes t=0.2s outcome=n/a (log event)        rules=ED-LOG-003,ED-LOG-004
+[PASS] blocked_ip_connect    detect=yes t=0.3s outcome=terminated (SIGTERM)   rules=ED-NET-003
+
+================ El Doctor scorecard ================
+
+PASS  cpu_hog - Runaway CPU process (python busy loop)
+      detected in : 9.4 s   process: terminated (SIGTERM)
+      rules       : ED-RES-001
+      MITRE       : T1496
+      response    : renice:success, collect_forensics:success, kill:success
+
+PASS  memory_hog - Memory leak growing in 32 MB steps
+      detected in : 17.7 s   process: terminated (SIGTERM)
+      rules       : ED-RES-002
+      MITRE       : T1499
+      response    : renice:success, collect_forensics:success, kill:success
+
+PASS  cryptominer - XMRig-style miner from /tmp (name + stratum command line)
+      detected in : 0.7 s   process: terminated (SIGTERM)
+      rules       : ED-IOC-003, ED-IOC-004, ED-PROC-001, SIGMA:8e7d6c5b-4a39-4281-9f0e-3b4c5d6e7f04
+      MITRE       : T1036.005, T1204.002, T1496
+      response    : suspend:success, collect_forensics:success, quarantine:success, kill:success
+
+PASS  reverse_shell_bash - bash reverse shell to 127.0.0.1:4444
+      detected in : 0.7 s   process: terminated (SIGKILL)
+      rules       : ED-NET-001, SIGMA:6b3f0a52-1c1e-4d5f-9a51-0c7c8e0f9a01
+      MITRE       : T1059.004, T1095
+      response    : suspend:success, collect_forensics:success, kill:success, suspend:blocked, kill:blocked, block_ip:blocked
+
+PASS  reverse_shell_python - python socket/dup2 reverse shell spawning /bin/sh
+      detected in : 0.2 s   process: terminated (SIGKILL)
+      rules       : SIGMA:6b3f0a52-1c1e-4d5f-9a51-0c7c8e0f9a01
+      MITRE       : T1059.004, T1095
+      response    : suspend:success, collect_forensics:success, kill:success
+
+PASS  download_exec - curl | bash dropper with long-running second stage
+      detected in : 0.5 s   process: terminated (SIGTERM)
+      rules       : SIGMA:2f9b8a4e-8d8e-4d62-9c4a-1e2c3b4d5e02
+      MITRE       : T1059.004, T1105
+      response    : collect_forensics:success, kill:success
+
+PASS  fork_storm - spawn storm (45 children in ~1s)
+      detected in : 0.8 s   process: terminated (SIGKILL)
+      rules       : ED-RES-003
+      MITRE       : T1499
+      response    : suspend:success, kill:success
+
+PASS  deleted_binary - binary deleted from disk after launch (/tmp)
+      detected in : 0.7 s   process: terminated (SIGTERM)
+      rules       : ED-PROC-001, ED-PROC-002
+      MITRE       : T1036.005, T1070.004, T1204.002
+      response    : collect_forensics:success, kill:success
+
+PASS  masquerade - userland process named like a kernel thread
+      detected in : 0.9 s   process: terminated (SIGTERM)
+      rules       : ED-PROC-001, ED-PROC-003
+      MITRE       : T1036.004, T1036.005, T1204.002
+      response    : collect_forensics:success, kill:success
+
+PASS  ioc_hash - binary whose SHA-256 is in the MalwareBazaar-format feed
+      detected in : 0.9 s   process: terminated (SIGTERM)
+      rules       : ED-IOC-001, ED-PROC-001
+      MITRE       : T1036.005, T1204.002, T1588.001
+      response    : suspend:success, collect_forensics:success, quarantine:success, kill:success
+
+PASS  c2_beacon - beacon to Feodo-listed C2 203.0.113.66:443
+      detected in : 0.7 s   process: terminated (SIGTERM)
+      rules       : ED-IOC-002
+      MITRE       : T1071
+      response    : suspend:success, collect_forensics:success, quarantine:skipped, kill:success, block_ip:success
+
+PASS  log_tamper - history tampering inside a persistent loop script
+      detected in : 0.7 s   process: terminated (SIGTERM)
+      rules       : SIGMA:1a2b3c4d-5e6f-4071-8a9b-0c1d2e3f4a05
+      MITRE       : T1070.002, T1070.003
+      response    : collect_forensics:success, kill:success
+
+PASS  ssh_bruteforce - SSH brute force from 203.0.113.50 via syslog (logger RFC5424) + success
+      detected in : 0.9 s   process: n/a (log event)
+      rules       : ED-LOG-001, ED-LOG-002, SIGMA:0d1e2f3a-4b5c-4d6e-8f70-8192a3b4c510
+      MITRE       : T1021.004, T1078, T1078.003, T1110, T1110.001
+      response    : block_ip:success, block_ip:skipped
+
+PASS  auth_log_file - auth.log tail: sudo failures + new account
+      detected in : 0.2 s   process: n/a (log event)
+      rules       : ED-LOG-003, ED-LOG-004
+      MITRE       : T1136.001, T1548.003
+      response    : -
+
+PASS  blocked_ip_connect - process connecting to blocked IP 203.0.113.50
+      detected in : 0.3 s   process: terminated (SIGTERM)
+      rules       : ED-NET-003
+      MITRE       : T1071
+      response    : kill:success
+
+15/15 scenarios passed
