@@ -1,0 +1,25 @@
+title: Cryptocurrency Miner Command Line
+id: 8e7d6c5b-4a39-4281-9f0e-3b4c5d6e7f04
+status: stable
+description: Command-line arguments specific to XMRig and other CPU/GPU miners (stratum pools, donate level, RandomX).
+author: El Doctor
+tags: [attack.impact, attack.t1496]
+logsource: {category: process_creation}
+detection:
+  selection:
+    CommandLine|contains:
+      - 'stratum+tcp://'
+      - 'stratum+ssl://'
+      - 'stratum2+tcp://'
+      - '--donate-level'
+      - '--cpu-max-threads-hint'
+      - '--randomx-'
+      - 'nicehash.com'
+      - 'moneroocean'
+      - 'supportxmr.com'
+      - 'minexmr'
+      - '--coin=monero'
+      - '--algo=rx/0'
+      - '-a rx/0'
+  condition: selection
+level: critical

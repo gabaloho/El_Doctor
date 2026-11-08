@@ -1,0 +1,26 @@
+id: pb-cryptominer
+name: Cryptominer containment
+description: >
+  Known miner binary / miner command line / miner YARA hit. Freeze the process at once (reversible),
+  preserve evidence, quarantine the binary, kill the process tree and block the pool IP.
+priority: 10
+exclusive: true
+max_mode: enforce
+approval_timeout_action: keep       # a suspected miner stays frozen until a human decides
+trigger:
+  rule_ids: [ED-IOC-003, "SIGMA:8e7d6c5b-*", ED-YARA-001]
+  mitre: [T1496]
+  min_severity: high
+conditions:
+  - {field: alert.source, op: in, value: [ioc, sigma, yara]}
+  - {field: alert.mitre, op: contains, value: T1496}
+  - {field: alert.process.pid, op: exists}
+steps:
+  - {action: suspend, auto: true}
+  - {action: collect_forensics}
+  - {action: quarantine}
+  - {action: kill, tree: true}
+  - action: block_ip
+    ip: "{{ alert.remote_ip }}"
+    when: [{field: alert.remote_ip, op: exists}]
+  - {action: notify, channels: [all], message: "Cryptominer containment playbook finished."}

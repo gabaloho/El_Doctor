@@ -1,0 +1,15 @@
+title: Office Application Spawning Shell or Script Host
+id: 3a4b5c6d-7e8f-4091-b2a3-b4c5d6e7f813
+status: stable
+description: Word/Excel/Outlook spawning cmd, PowerShell, wscript, mshta etc. - classic malicious macro behaviour.
+author: El Doctor
+tags: [attack.initial-access, attack.t1566.001, attack.execution, attack.t1059.001, attack.t1204.002]
+logsource: {category: process_creation, product: windows}
+detection:
+  sel_parent:
+    ParentImage|endswith: ['\WINWORD.EXE', '\EXCEL.EXE', '\POWERPNT.EXE', '\OUTLOOK.EXE', '\MSACCESS.EXE', '\MSPUB.EXE', '\ONENOTE.EXE']
+  sel_child:
+    Image|endswith: ['\cmd.exe', '\powershell.exe', '\pwsh.exe', '\wscript.exe', '\cscript.exe', '\mshta.exe',
+                     '\rundll32.exe', '\regsvr32.exe', '\certutil.exe', '\bitsadmin.exe', '\schtasks.exe']
+  condition: sel_parent and sel_child
+level: high

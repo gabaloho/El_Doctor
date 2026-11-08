@@ -1,0 +1,14 @@
+title: Executable Bit Set on File in Temporary Directory
+id: 5a6b7c8d-9e0f-4a1b-b2c3-d4e5f6a7b808
+status: stable
+description: chmod +x on a file under /tmp, /var/tmp or /dev/shm - usually right before running a dropped payload.
+author: El Doctor
+tags: [attack.defense-evasion, attack.t1222.002]
+logsource: {category: process_creation, product: linux}
+detection:
+  sel_chmod:
+    Image|endswith: '/chmod'
+  sel_exec:
+    CommandLine|re: '(\+x|7[0-7][0-7]|[0-7]7[0-7]|[0-7][0-7]7|a\+x|u\+x)\s+(/tmp/|/var/tmp/|/dev/shm/)'
+  condition: sel_chmod and sel_exec
+level: medium

@@ -1,0 +1,99 @@
+El Doctor requirement verification - python 3.12.3 (/usr/bin/python3)
+
+  [PASS] R1.1  package eldoctor/ with detection, playbooks, response, notify, auth, deploy, ui modules
+  [PASS] R1.2  original El Doctor features kept: CPU/mem/disk/net metrics, CSV log, curses console, email
+  [PASS] R1.3  detection engine: heuristics + threat-intel IOCs, every rule mapped to MITRE ATT&CK
+  [PASS] R1.4  threat-intel feed updater pulls abuse.ch-format feeds and matches a C2 IP
+  [PASS] R1.5  Sigma (open-source detection format) rules evaluated natively
+  [PASS] R1.6  YAML SOAR playbooks load and validate
+  [PASS] R1.7  three response modes: monitor / interactive approval / enforce
+  [PASS] R1.8  safety guards refuse dangerous actions
+  [PASS] R1.9  response actions: kill, suspend, quarantine, block-IP (plus renice, forensics)
+  [PASS] R1.10 notifications: email, Slack, Teams, Discord, Shuffle/n8n/Tines webhooks, TheHive, syslog
+  [PASS] R1.11 registration required before use; roles; use case + deployment target captured
+  [PASS] R1.12 deployment generator: Windows desktop, Linux, Docker, Kubernetes, AWS, Azure, GCP
+  [PASS] R1.13 real-time detection and automated kill of resource hog + malicious process (live agent)
+  [PASS] R1.14 log-based detection: real syslog (RFC5424 over UDP) brute force -> alert + block
+  [PASS] R2.1  turn 2: `python3 eldoctor` and other launch styles work (no '<frozen runpy>' error)
+  [PASS] R2.2  turn 2: missing dependency -> install instruction instead of a traceback
+  [PASS] R3.1  turn 3: desktop GUI - all tabs, registration/login, approvals, manual response (GUI tests)
+  [PASS] R4.1  turn 4: GUI starts from a Python WITHOUT tkinter and without sudo (auto GUI runtime)
+  [PASS] R5.1  turn 5: light mode + dark mode + follow-system, switchable, WCAG AA contrast
+  [PASS] R7.1  local authenticated API on a Unix socket / named pipe with OS-level peer credentials
+  [PASS] R7.2  stateless session tokens (JWT HS256) bound to the OS account; revocation without a session table
+  [PASS] R7.3  CLI / TUI / GUI are clients: RBAC for approvals and admin is decided by the agent
+  [PASS] R7.4  data folder locked to the service account (eldoctor service)
+  [PASS] R7.5  tamper-evident audit trail: hash-chained records + agent MAC + sealed head pointer
+  [PASS] R7.6  audit trail forwarded to the SIEM in real time (syslog TCP/UDP/TLS, CEF / RFC 5424 / JSON, webhook)
+  [PASS] R7.7  P0-1 regression: approval forged in the database is refused, raised as a critical incident
+  [PASS] R8.1  forward-secure signatures: stealing every key file cannot rewrite history; SIEM verifies w/o secret
+  [PASS] R8.2  alerts and the actions log are tamper-evident (signed ledger): edits, inserts, deletions detected
+  [PASS] R8.3  HMAC-key holder cannot forge state the agent acts on (role, IP block, approval request)
+  [PASS] T.1   full automated test suite (pytest)
+  [PASS] T.2   live purple-team lab: 15 attack scenarios vs running agent (enforce)
+
+====================================================================================================
+PASS  R1.1  package eldoctor/ with detection, playbooks, response, notify, auth, deploy, ui modules
+              -> all 8 sub-packages present (0.0s)
+PASS  R1.2  original El Doctor features kept: CPU/mem/disk/net metrics, CSV log, curses console, email
+              -> cpu=0.0% mem=3.8% disk=10.1%, CSV + legacy entry point OK (0.4s)
+PASS  R1.3  detection engine: heuristics + threat-intel IOCs, every rule mapped to MITRE ATT&CK
+              -> 24 heuristic/IOC rules + 18 Sigma rules, all ATT&CK-mapped; 20 IOCs (0.1s)
+PASS  R1.4  threat-intel feed updater pulls abuse.ch-format feeds and matches a C2 IP
+              -> 2 indicators downloaded, C2 IP matched (0.6s)
+PASS  R1.5  Sigma (open-source detection format) rules evaluated natively
+              -> reverse-shell Sigma rule fired (18 rules loaded) (0.1s)
+PASS  R1.6  YAML SOAR playbooks load and validate
+              -> pb-cryptominer, pb-reverse-shell, pb-threat-intel-hit, pb-fork-bomb, pb-resource-hog, pb-brute-force, pb-blocked-connection, pb-malicious-execution, pb-notify-only (0.0s)
+PASS  R1.7  three response modes: monitor / interactive approval / enforce
+              -> monitor: alive + would_run | interactive: approval pending | enforce: killed (3.5s)
+PASS  R1.8  safety guards refuse dangerous actions
+              -> parent chain, PID 1, lsass, loopback/metadata/private IPs, interpreters all protected (0.0s)
+PASS  R1.9  response actions: kill, suspend, quarantine, block-IP (plus renice, forensics)
+              -> suspend/resume/kill OK, quarantined to vault, block-IP via app-level (1.0s)
+PASS  R1.10 notifications: email, Slack, Teams, Discord, Shuffle/n8n/Tines webhooks, TheHive, syslog
+              -> 9 channels delivered (HTTP x7, SMTP, UDP CEF); webhook HMAC signature valid (1.0s)
+PASS  R1.11 registration required before use; roles; use case + deployment target captured
+              -> unregistered -> blocked (2); first user admin; self-registered viewer denied approve (3) (3.3s)
+PASS  R1.12 deployment generator: Windows desktop, Linux, Docker, Kubernetes, AWS, Azure, GCP
+              -> windows:6, linux:8, docker:7, kubernetes:6, aws:5, azure:4, gcp:4 files (0.7s)
+PASS  R1.13 real-time detection and automated kill of resource hog + malicious process (live agent)
+              -> CPU hog + miner detected and killed in 3.9s (4.9s)
+PASS  R1.14 log-based detection: real syslog (RFC5424 over UDP) brute force -> alert + block
+              -> 6 failed SSH logins via syslog -> ED-LOG-001 (T1110.001) -> 203.0.113.50 blocked (1.7s)
+PASS  R2.1  turn 2: `python3 eldoctor` and other launch styles work (no '<frozen runpy>' error)
+              -> python eldoctor | -m eldoctor | el_doctor.py | eldoctor/__main__.py | from another folder (1.5s)
+PASS  R2.2  turn 2: missing dependency -> install instruction instead of a traceback
+              -> clear `pip install -r requirements.txt` message, exit code 1 (0.2s)
+PASS  R3.1  turn 3: desktop GUI - all tabs, registration/login, approvals, manual response (GUI tests)
+              -> 14 passed in 140.85s (0:02:20) (python /home/model/.cache/eldoctor/gui-runtime/py3.13/bin/python) (144.1s)
+PASS  R4.1  turn 4: GUI starts from a Python WITHOUT tkinter and without sudo (auto GUI runtime)
+              -> this Python has no tkinter; relaunched in GUI runtime -> El Doctor 2.0.0 (2.4s)
+PASS  R5.1  turn 5: light mode + dark mode + follow-system, switchable, WCAG AA contrast
+              -> light + dark palettes >= 4.5:1 on all backgrounds; --theme / Ctrl+T / Settings > Appearance (1.6s)
+PASS  R7.1  local authenticated API on a Unix socket / named pipe with OS-level peer credentials
+              -> socket /tmp/edverify-l9kg9hdk/api.sock (0o600); kernel peer creds uid=1000 pid=10410 seen by the agent and written into the audit trail (0.7s)
+PASS  R7.2  stateless session tokens (JWT HS256) bound to the OS account; revocation without a session table
+              -> HS256 JWT (sub/uid/tv/ouid/jti/exp), replay from uid 4242 refused, edited claims refused, logout = jti denylist (0.1s)
+PASS  R7.3  CLI / TUI / GUI are clients: RBAC for approvals and admin is decided by the agent
+              -> front ends contain no DB access; viewer refused by the agent on 18 protected methods (approve, respond, admin...), 18 api_denied audit records (0.2s)
+PASS  R7.4  data folder locked to the service account (eldoctor service)
+              -> 17 paths owned by uid 1000 with no group/other access (folder 0o700, files 0o600) (13.0s)
+PASS  R7.5  tamper-evident audit trail: hash-chained records + agent MAC + sealed head pointer
+              -> edit actor -> record content was modified; delete a record -> sequence gap: expected 4; truncate the tail -> records 6..6 were deleted from the end of the trail (0.3s)
+PASS  R7.6  audit trail forwarded to the SIEM in real time (syslog TCP/UDP/TLS, CEF / RFC 5424 / JSON, webhook)
+              -> 3 records delivered in order in 0.02s; SIEM copy re-verifies (hash chain) (0.1s)
+PASS  R7.7  P0-1 regression: approval forged in the database is refused, raised as a critical incident
+              -> forged approval not executed (process alive, status 'rejected', ED-INT-001); forged admin role refused (1.2s)
+PASS  R8.1  forward-secure signatures: stealing every key file cannot rewrite history; SIEM verifies w/o secret
+              -> 7 records each signed by a one-time Ed25519 key, 1 key on disk (the next one); rewrite with stolen keys detected locally and in the SIEM copy; genesis ed25519:805b:d18c:0e37... (0.1s)
+PASS  R8.2  alerts and the actions log are tamper-evident (signed ledger): edits, inserts, deletions detected
+              -> downplayed alert, deleted alert, rewritten kill and planted alert all reported by verify (modified, deleted, inserted) (0.1s)
+PASS  R8.3  HMAC-key holder cannot forge state the agent acts on (role, IP block, approval request)
+              -> recomputed HMAC seals accepted by no check: role=admin, forged IP block, retargeted approval all refused (0.2s)
+PASS  T.1   full automated test suite (pytest)
+              -> 203 passed, 1 skipped in 304.06s (0:05:04) (python /home/model/.cache/eldoctor/gui-runtime/py3.13/bin/python) (307.0s)
+PASS  T.2   live purple-team lab: 15 attack scenarios vs running agent (enforce)
+              -> 15/15 scenarios passed (114.7s)
+====================================================================================================
+31 passed, 0 failed, 0 skipped

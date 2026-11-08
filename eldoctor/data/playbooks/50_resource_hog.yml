@@ -1,0 +1,16 @@
+id: pb-resource-hog
+name: Runaway process consuming CPU / memory
+description: >
+  Graduated response for a process that keeps a core (or too much RAM) busy for too long:
+  1) lower its priority immediately (reversible, no approval), 2) collect evidence,
+  3) kill it (automatically in enforce mode, after approval in interactive mode).
+priority: 50
+exclusive: true
+approval_timeout_action: resume
+trigger:
+  rule_ids: [ED-RES-001, ED-RES-002]
+steps:
+  - {action: renice}
+  - {action: collect_forensics}
+  - {action: kill}
+  - {action: notify, channels: [all], message: "Resource-abuse playbook finished."}

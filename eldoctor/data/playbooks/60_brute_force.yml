@@ -1,0 +1,14 @@
+id: pb-brute-force
+name: Brute force source blocking
+description: Block the source address of SSH/RDP/Windows logon brute force (firewall when privileged, app-level otherwise).
+priority: 60
+exclusive: true
+trigger:
+  rule_ids: [ED-LOG-001, ED-LOG-002, ED-LOG-005]
+conditions:
+  - {field: alert.remote_ip, op: exists}
+steps:
+  - action: block_ip
+    ip: "{{ alert.remote_ip }}"
+    ttl_hours: 24
+  - {action: notify, channels: [all], message: "Brute-force source handled."}

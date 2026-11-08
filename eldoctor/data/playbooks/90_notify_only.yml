@@ -1,0 +1,10 @@
+id: pb-notify-only
+name: Notify (system thresholds, logs, medium findings)
+description: >
+  Legacy El Doctor behaviour: alert the user (email/Slack/...) when CPU, memory or disk thresholds are exceeded
+  and for detections that do not warrant automatic containment.
+priority: 90
+trigger:
+  min_severity: low
+steps:
+  - {action: notify, channels: [all]}

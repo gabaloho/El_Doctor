@@ -1,0 +1,12 @@
+title: Base64 Decoded Payload Executed by Shell
+id: 4c1d7e3a-5b6f-4a8e-9f0d-2a3b4c5d6e03
+status: stable
+description: base64 -d piped into a shell or interpreter, used to hide malicious commands.
+author: El Doctor
+tags: [attack.defense-evasion, attack.t1140, attack.t1027, attack.execution, attack.t1059.004]
+logsource: {category: process_creation, product: linux}
+detection:
+  selection:
+    CommandLine|re: 'base64\s+(-d|--decode|-D)[^|]*\|\s*(ba|da|z)?sh|b64decode\(.*exec'
+  condition: selection
+level: high

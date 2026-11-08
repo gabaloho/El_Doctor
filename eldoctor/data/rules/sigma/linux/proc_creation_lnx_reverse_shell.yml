@@ -1,0 +1,26 @@
+title: Linux Reverse Shell Command Line
+id: 6b3f0a52-1c1e-4d5f-9a51-0c7c8e0f9a01
+status: stable
+description: Detects well-known reverse-shell one-liners (bash /dev/tcp, netcat -e, socat exec, mkfifo pipes, scripting-language sockets).
+author: El Doctor
+references:
+  - https://attack.mitre.org/techniques/T1059/004/
+  - https://github.com/swisskyrepo/PayloadsAllTheThings/blob/master/Methodology%20and%20Resources/Reverse%20Shell%20Cheatsheet.md
+tags: [attack.execution, attack.t1059.004, attack.command-and-control, attack.t1095]
+logsource: {category: process_creation, product: linux}
+detection:
+  sel_devtcp:
+    CommandLine|contains: ['/dev/tcp/', '/dev/udp/']
+  sel_nc_exec:
+    CommandLine|re: '(^|[/\s])(nc|ncat|netcat|nc\.traditional|nc\.openbsd|busybox nc)\s+(\S+\s+)*-[a-z]*[ec]\s'
+  sel_ncat_exec:
+    CommandLine|contains: ['ncat --exec', 'ncat --sh-exec', 'ncat -e ']
+  sel_socat:
+    CommandLine|contains|all: ['socat', 'exec:']
+  sel_fifo:
+    CommandLine|contains|all: ['mkfifo', '/tmp/', '| nc ']
+  sel_script_socket:
+    CommandLine|re: '(python[23]?|perl|ruby|php)\s+-(c|e|r)\s.*(socket|fsockopen|TCPSocket).*(connect|exec|spawn|dup2|STDIN)'
+  condition: 1 of sel_*
+falsepositives: [Penetration tests, CTF training machines]
+level: critical

@@ -1,0 +1,231 @@
+# El Doctor default configuration.
+# Copy to $ELDOCTOR_HOME/config.yaml (eldoctor config init) and override what you need.
+# Secrets are NEVER stored here: use the *_env keys to reference environment variables.
+
+agent:
+  interval: 2.0                 # seconds between collection cycles
+  mode: interactive             # monitor | interactive | enforce
+  dry_run: false                # true = playbooks never execute destructive actions
+  metrics_csv: metrics.csv      # relative to $ELDOCTOR_HOME (legacy El Doctor CSV log)
+  approval_timeout: 300         # seconds a pending approval stays valid (interactive mode)
+  initial_scan: true            # evaluate all already-running processes at start-up
+
+thresholds:
+  system_cpu: 90                # % whole machine (legacy El Doctor thresholds)
+  system_memory: 90
+  system_disk: 90
+  process_cpu: 90               # % of ONE core (psutil semantics; 400 = 4 full cores)
+  process_cpu_duration: 20      # seconds the process must stay above process_cpu
+  process_memory: 25            # % of total RAM used by a single process
+  process_memory_duration: 10
+  spawn_storm_children: 50      # new children of one parent ...
+  spawn_storm_window: 30        # ... within this many seconds => fork-bomb alert
+
+detection:
+  alert_cooldown: 300           # seconds before the same alert (rule+entity) can fire again
+  hash_executables: true
+  max_hash_mb: 100
+  sigma_dirs: []                # extra Sigma rule directories (e.g. a SigmaHQ checkout)
+  disabled_rules: []            # rule ids to silence
+  suspicious_ports: [3333, 4444, 5555, 6666, 7777, 8888, 9999, 14433, 14444, 45560, 45700]
+  miner_names: [xmrig, xmr-stak, minerd, cpuminer, ccminer, nbminer, t-rex, lolminer,
+                phoenixminer, kdevtmpfsi, kinsing, sysupdate, networkservice, xmrigdaemon]
+  suspicious_paths_linux: [/tmp/, /dev/shm/, /var/tmp/, /run/user/]
+  suspicious_paths_windows: ['\appdata\local\temp\', '\windows\temp\', '\users\public\',
+                             '\$recycle.bin\', '\downloads\', '\programdata\temp\']
+  shells: [sh, bash, dash, zsh, ksh, csh, tcsh, fish, busybox, cmd.exe, powershell.exe, pwsh.exe, pwsh]
+  web_servers: [nginx, apache2, httpd, php-fpm, w3wp.exe, tomcat, java, node, caddy, lighttpd]
+  yara:
+    enabled: auto               # auto = on when yara-python is installed
+    max_file_mb: 50
+    rules_dirs: []
+    scan: suspicious            # suspicious (temp dirs, deleted, ioc) | all
+
+intel:
+  ioc_files: []                 # extra CSV/TXT IOC files
+  auto_update: false            # true = the agent refreshes the feeds below every update_interval_hours
+  update_interval_hours: 12
+  feeds:                        # free / open threat-intel feeds (abuse.ch, Emerging Threats, ...)
+    - name: feodotracker_ips
+      url: https://feodotracker.abuse.ch/downloads/ipblocklist.txt
+      type: ip
+      severity: critical
+      description: abuse.ch Feodo Tracker botnet C2 IP
+    - name: et_compromised_ips
+      url: https://rules.emergingthreats.net/blockrules/compromised-ips.txt
+      type: ip
+      severity: high
+      description: Emerging Threats compromised host
+    - name: malwarebazaar_recent_sha256
+      url: https://bazaar.abuse.ch/export/txt/sha256/recent/
+      type: sha256
+      severity: critical
+      description: abuse.ch MalwareBazaar recent malware sample
+    - name: urlhaus_hostfile
+      url: https://urlhaus.abuse.ch/downloads/hostfile/
+      type: domain
+      format: hosts
+      severity: high
+      description: abuse.ch URLhaus malware distribution host
+
+logs:
+  files: [/var/log/auth.log, /var/log/secure, /var/log/syslog, /var/log/messages]
+  read_existing: false          # false = only new lines (tail -f semantics)
+  journald: auto                # auto | true | false
+  auditd: auto                  # auto | true | false - EXECVE records give full exec coverage (needs root + audit rule)
+  auditd_path: /var/log/audit/audit.log
+  windows_eventlog: auto        # auto | true | false (uses wevtutil, Sysmon supported)
+  windows_channels: [Security, System, Microsoft-Windows-Sysmon/Operational,
+                     Microsoft-Windows-PowerShell/Operational]
+  syslog_listener:
+    enabled: false              # receive syslog from other hosts / network devices
+    host: 127.0.0.1
+    port: 5514
+    protocol: udp               # udp | tcp
+  brute_force:
+    threshold: 5                # failed logins from one source ...
+    window: 120                 # ... within N seconds
+
+safety:
+  # Processes El Doctor will never kill/suspend/quarantine, whatever a playbook says.
+  protected_names: [systemd, init, kthreadd, sshd, dbus-daemon, dbus-broker, systemd-journald,
+                    systemd-logind, systemd-udevd, udevd, rsyslogd, containerd, dockerd, kubelet,
+                    Xorg, Xvfb, gdm, sddm, lightdm, login, agetty, cron, crond, auditd, polkitd,
+                    NetworkManager, wpa_supplicant, eldoctor,
+                    System, Registry, smss.exe, csrss.exe, wininit.exe, winlogon.exe, services.exe,
+                    lsass.exe, lsaiso.exe, svchost.exe, dwm.exe, explorer.exe, fontdrvhost.exe,
+                    spoolsv.exe, MsMpEng.exe, MsSense.exe, SecurityHealthService.exe, Memory Compression]
+  protected_users: []           # e.g. [root, 'NT AUTHORITY\SYSTEM'] to never touch their processes
+  only_descendants_of: []       # response scope: [] = whole host; [PID, ...] = only processes started by
+                                # these PIDs (tests / CI / labs - never touch unrelated work)
+  allowlist:
+    names: []
+    paths: []
+    hashes: []
+    ips: []
+  never_block_networks: [127.0.0.0/8, '::1/128', 169.254.0.0/16, 'fe80::/10', 0.0.0.0/32,
+                         10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 'fc00::/7']
+  never_block_ips: [169.254.169.254, 168.63.129.16]   # cloud metadata / Azure wire server
+  quarantine_forbidden_paths: [/usr/, /bin/, /sbin/, /lib/, /lib64/, /etc/, /boot/,
+                               'c:\windows\', 'c:\program files\', 'c:\program files (x86)\']
+  max_actions_per_window: 10    # circuit breaker: destructive actions allowed ...
+  action_window: 60             # ... per N seconds; above that El Doctor drops to interactive
+  breaker_cooldown: 600
+  block_ttl_hours: 24
+  max_blocked_ips: 500
+
+notifications:
+  min_severity: medium
+  rate_limit_per_minute: 30
+  include_actions: true         # false = notifications carry the alert only, not the response steps
+  channels:
+    - {type: console}
+    - {type: jsonl, path: alerts.jsonl}
+    # - type: email
+    #   smtp_host: smtp.gmail.com
+    #   smtp_port: 587
+    #   starttls: true
+    #   username: you@example.invalid
+    #   password_env: ELDOCTOR_SMTP_PASSWORD
+    #   from: you@example.invalid
+    #   to: [soc@example.invalid]
+    #   min_severity: high
+    # - {type: slack,   url_env: ELDOCTOR_SLACK_WEBHOOK}
+    # - {type: teams,   url_env: ELDOCTOR_TEAMS_WEBHOOK}
+    # - {type: discord, url_env: ELDOCTOR_DISCORD_WEBHOOK}
+    # - {type: webhook, name: shuffle, url_env: ELDOCTOR_SHUFFLE_WEBHOOK, secret_env: ELDOCTOR_WEBHOOK_SECRET}
+    # - {type: webhook, name: n8n,     url_env: ELDOCTOR_N8N_WEBHOOK}
+    # - {type: webhook, name: tines,   url_env: ELDOCTOR_TINES_WEBHOOK}
+    # - {type: thehive, url: http://thehive:9000, api_key_env: ELDOCTOR_THEHIVE_KEY, version: 5}
+    # - {type: syslog,  host: siem.example.com, port: 514, protocol: udp, format: cef}
+
+playbooks:
+  dirs: []                      # extra playbook directories (bundled ones always load)
+  disabled: []
+
+gui:
+  theme: system                 # system (follow the OS) | light | dark - users can switch in the GUI (Ctrl+T)
+
+registration:                   # registration + login are always required (not configurable)
+  session_hours: 12             # lifetime of the stateless session token (JWT) issued by the agent
+  self_service: true            # false = only admins can create accounts (users add / GUI)
+  webhook_url: ''               # optional: send the registration profile (never the password)
+                                # to your own endpoint so you know who uses El Doctor and why
+  lockout_attempts: 5
+  lockout_minutes: 5
+
+api:                            # local API between the agent and the CLI / TUI / GUI (all checks happen in the agent)
+  socket: ''                    # '' = $ELDOCTOR_SOCKET, else <data folder>/api.sock (service: /run/eldoctor/api.sock)
+                                # Windows: named pipe \\.\pipe\eldoctor-api-<hash of the data folder>
+  socket_mode: auto             # auto = 0666 for the service (auth is by token + peer credentials), else 0600
+  socket_group: ''              # e.g. eldoctor: socket 0660 root:eldoctor - only members can even connect
+  allowed_os_users: []          # OS accounts allowed to connect (empty = any local account; root/service always)
+  allowed_os_groups: []         # ... or members of these OS groups
+  admin_os_groups: []           # e.g. [sudo, wheel]: admin-only operations additionally need OS group membership
+  trusted_server_users: []      # clients accept an API socket served by root, themselves, the socket folder's
+                                # owner - and these accounts (e.g. a dedicated 'eldoctor' service user)
+  max_connections: 64
+  windows_admins_access: false  # service lockdown on Windows: true = Administrators keep access to the data folder
+
+audit:                          # tamper-evident audit trail (hash chain + agent MAC) forwarded to the SIEM in real time
+  verify_on_start: true         # verify the whole chain when the agent starts ...
+  verify_interval_minutes: 15   # ... and periodically; a broken chain raises ED-INT-001 (critical) + notification
+  forward_to_notification_syslog: true   # also send every audit record to the syslog channel(s) configured above
+  jsonl: audit.jsonl            # local JSON-lines copy in the data folder ('' = off) for Filebeat / Vector / Splunk UF
+  backfill: true                # a newly added destination first receives the existing trail
+  genesis_fingerprint: ''       # pin: the 'genesis' printed by `eldoctor audit verify` (ed25519:xxxx:...). If the
+                                # chain ever starts from another key, it was rebuilt - verify reports TAMPERED
+  forward: []                   # extra destinations, delivered in order, at-least-once, cursor kept across restarts
+    # - {type: syslog, host: siem.example.com, port: 6514, protocol: tls, format: cef, ca_file: /etc/ssl/siem-ca.pem}
+    # - {type: syslog, host: 10.0.0.5, port: 514, protocol: tcp, format: rfc5424}     # Graylog / rsyslog
+    # - {type: syslog, host: wazuh.example.com, port: 514, protocol: udp, format: json}
+    # - {type: webhook, url_env: ELDOCTOR_AUDIT_WEBHOOK, secret_env: ELDOCTOR_WEBHOOK_SECRET}   # Splunk HEC, Elastic...
+
+activity:                       # user-activity record for forensics & triage (sessions, apps, files, boots, wipes)
+  enabled: true
+  retention_days: 0             # 0 = keep forever (whole sealed batches are pruned when > 0)
+  heartbeat_seconds: 30         # last-sign-of-life stamp: dates shutdowns / crashes / monitoring gaps
+  seal_interval: 60             # routine records are committed at once and sealed in the signed audit chain once
+                                # per interval (deletions, sessions, boots, incidents, downloads: immediately)
+  attribution_window: 300       # seconds a process stays a candidate for "who changed this file"
+  jsonl: ''                     # e.g. activity.jsonl: JSON-lines copy in the data folder for Filebeat / Vector / UF
+  wtmp: /var/log/wtmp           # Linux: logins that happened while El Doctor was not running
+  processes:
+    enabled: true
+    scope: users                # users = people's accounts (+ root / Administrator) | all = every account
+    record_inventory: true      # record the applications already running when the agent starts
+    exclude_names: []
+  files:
+    enabled: true
+    backend: auto               # auto (inotify on Linux, else polling) | inotify | poll
+    paths: auto                 # auto = every home folder when privileged (/home, /root, C:\Users), else your own
+    record_opens: true          # record files opened (rate-limited and de-duplicated, see below)
+    open_dedupe_seconds: 600
+    max_open_events_per_minute: 300   # beyond that: one bulk_access summary (indexers, backups, mass reading)
+    open_handles_interval: 30   # seconds between samples of files held open by people's processes (attribution)
+    poll_interval: 60           # polling backend: seconds between folder scans
+    merge_delay: 0.7            # seconds events are held to merge create+write, atomic saves, kernel records
+    download_dirs: [Downloads, Download, Téléchargements, Descargas, Scaricati, Transferências]
+    hash_max_mb: 50             # SHA-256 of downloaded files up to this size (checked against threat intel)
+    max_files: 500000           # folder-scan limit (start-up comparison); deletions are not inferred beyond it
+    max_watches: 100000         # inotify folders; raise fs.inotify.max_user_watches for very large homes
+    never_watch: []             # extra folders never watched (El Doctor's own folders are always excluded)
+    exclude: [.cache, .ccache, .npm, .yarn, .pnpm-store, .cargo, .rustup, .gradle, .m2, .nuget, .ivy2, .sbt,
+              .conda, .pyenv, .nvm, .local, .var, snap, .steam, .wine, .mozilla, .thunderbird, .config, .vscode,
+              .vscode-server, .cursor, .java, .dotnet, .android, .gvfs, .dbus, node_modules, __pycache__, .git,
+              .hg, .svn, .venv, venv, site-packages, .tox, .mypy_cache, .pytest_cache, .ruff_cache,
+              .ipynb_checkpoints, .terraform, AppData, 'Application Data', 'Local Settings', '$Recycle.Bin']
+    include: [.local/share/Trash/files, '*/.local/share/Trash/files']   # Trash moves = deletions by the user
+  wipe:                         # mass deletion = data-wipe incident (ED-ACT-001), reported to the admins
+    enabled: true
+    threshold: 50               # files/folders deleted ...
+    window: 60                  # ... within N seconds
+    quiet: 20                   # incident closes after N seconds without deletions -> full report e-mailed
+  report:                       # e-mail to the registered administrators (users with role admin)
+    email_admins: true
+    extra_recipients: []        # more addresses (e.g. the SOC mailbox)
+    smtp: {}                    # {smtp_host, smtp_port, starttls, ssl, username, password_env, from};
+                                # empty = use the first 'email' channel under notifications.channels
+    max_attachment_mb: 10       # zipped CSV of every affected file; larger lists are truncated (use export)
+    body_rows: 100
+    retry_max_seconds: 21600    # undelivered reports are retried (across restarts) with back-off up to this

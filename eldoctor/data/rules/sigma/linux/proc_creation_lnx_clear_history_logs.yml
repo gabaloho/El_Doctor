@@ -1,0 +1,24 @@
+title: Shell History or System Log Tampering
+id: 1a2b3c4d-5e6f-4071-8a9b-0c1d2e3f4a05
+status: stable
+description: Attempts to clear bash history or wipe/truncate system logs to remove evidence.
+author: El Doctor
+tags: [attack.defense-evasion, attack.t1070.003, attack.t1070.002]
+logsource: {category: process_creation, product: linux}
+detection:
+  sel_history:
+    CommandLine|contains:
+      - 'history -c'
+      - 'unset HISTFILE'
+      - 'HISTFILESIZE=0'
+      - 'export HISTSIZE=0'
+      - 'rm ~/.bash_history'
+      - 'rm -f ~/.bash_history'
+      - '/dev/null > ~/.bash_history'
+      - 'ln -sf /dev/null ~/.bash_history'
+  sel_logs:
+    CommandLine|re: '(rm|shred|truncate|>)\s.*(/var/log/(auth\.log|secure|syslog|messages|wtmp|btmp|lastlog)|journal)'
+  sel_journal:
+    CommandLine|contains: ['journalctl --vacuum-time=1s', 'journalctl --rotate --vacuum']
+  condition: 1 of sel_*
+level: high

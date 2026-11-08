@@ -1,0 +1,324 @@
+[
+  {
+    "scenario": "cpu_hog",
+    "desc": "Runaway CPU process (python busy loop)",
+    "detected": true,
+    "rules": [
+      "ED-RES-001"
+    ],
+    "mitre": [
+      "T1496"
+    ],
+    "actions": [
+      "renice:success",
+      "collect_forensics:success",
+      "kill:success"
+    ],
+    "outcome": "terminated (SIGTERM)",
+    "ok": true,
+    "ttd": 9.4,
+    "ttr": 12.6
+  },
+  {
+    "scenario": "memory_hog",
+    "desc": "Memory leak growing in 32 MB steps",
+    "detected": true,
+    "rules": [
+      "ED-RES-002"
+    ],
+    "mitre": [
+      "T1499"
+    ],
+    "actions": [
+      "renice:success",
+      "collect_forensics:success",
+      "kill:success"
+    ],
+    "outcome": "terminated (SIGTERM)",
+    "ok": true,
+    "ttd": 17.7,
+    "ttr": 21.0
+  },
+  {
+    "scenario": "cryptominer",
+    "desc": "XMRig-style miner from /tmp (name + stratum command line)",
+    "detected": true,
+    "rules": [
+      "ED-IOC-003",
+      "ED-IOC-004",
+      "ED-PROC-001",
+      "SIGMA:8e7d6c5b-4a39-4281-9f0e-3b4c5d6e7f04"
+    ],
+    "mitre": [
+      "T1036.005",
+      "T1204.002",
+      "T1496"
+    ],
+    "actions": [
+      "suspend:success",
+      "collect_forensics:success",
+      "quarantine:success",
+      "kill:success"
+    ],
+    "outcome": "terminated (SIGTERM)",
+    "ok": true,
+    "ttd": 0.7,
+    "ttr": 4.0
+  },
+  {
+    "scenario": "reverse_shell_bash",
+    "desc": "bash reverse shell to 127.0.0.1:4444",
+    "detected": true,
+    "rules": [
+      "ED-NET-001",
+      "SIGMA:6b3f0a52-1c1e-4d5f-9a51-0c7c8e0f9a01"
+    ],
+    "mitre": [
+      "T1059.004",
+      "T1095"
+    ],
+    "actions": [
+      "suspend:success",
+      "collect_forensics:success",
+      "kill:success",
+      "suspend:blocked",
+      "kill:blocked",
+      "block_ip:blocked"
+    ],
+    "outcome": "terminated (SIGKILL)",
+    "ok": true,
+    "ttd": 0.7,
+    "ttr": 3.8
+  },
+  {
+    "scenario": "reverse_shell_python",
+    "desc": "python socket/dup2 reverse shell spawning /bin/sh",
+    "detected": true,
+    "rules": [
+      "SIGMA:6b3f0a52-1c1e-4d5f-9a51-0c7c8e0f9a01"
+    ],
+    "mitre": [
+      "T1059.004",
+      "T1095"
+    ],
+    "actions": [
+      "suspend:success",
+      "collect_forensics:success",
+      "kill:success"
+    ],
+    "outcome": "terminated (SIGKILL)",
+    "ok": true,
+    "ttd": 0.2,
+    "ttr": 3.5
+  },
+  {
+    "scenario": "download_exec",
+    "desc": "curl | bash dropper with long-running second stage",
+    "detected": true,
+    "rules": [
+      "SIGMA:2f9b8a4e-8d8e-4d62-9c4a-1e2c3b4d5e02"
+    ],
+    "mitre": [
+      "T1059.004",
+      "T1105"
+    ],
+    "actions": [
+      "collect_forensics:success",
+      "kill:success"
+    ],
+    "outcome": "terminated (SIGTERM)",
+    "ok": true,
+    "ttd": 0.5,
+    "ttr": 3.8
+  },
+  {
+    "scenario": "fork_storm",
+    "desc": "spawn storm (45 children in ~1s)",
+    "detected": true,
+    "rules": [
+      "ED-RES-003"
+    ],
+    "mitre": [
+      "T1499"
+    ],
+    "actions": [
+      "suspend:success",
+      "kill:success"
+    ],
+    "outcome": "terminated (SIGKILL)",
+    "ok": true,
+    "ttd": 0.8,
+    "ttr": 4.0
+  },
+  {
+    "scenario": "deleted_binary",
+    "desc": "binary deleted from disk after launch (/tmp)",
+    "detected": true,
+    "rules": [
+      "ED-PROC-001",
+      "ED-PROC-002"
+    ],
+    "mitre": [
+      "T1036.005",
+      "T1070.004",
+      "T1204.002"
+    ],
+    "actions": [
+      "collect_forensics:success",
+      "kill:success"
+    ],
+    "outcome": "terminated (SIGTERM)",
+    "ok": true,
+    "ttd": 0.7,
+    "ttr": 3.8
+  },
+  {
+    "scenario": "masquerade",
+    "desc": "userland process named like a kernel thread",
+    "detected": true,
+    "rules": [
+      "ED-PROC-001",
+      "ED-PROC-003"
+    ],
+    "mitre": [
+      "T1036.004",
+      "T1036.005",
+      "T1204.002"
+    ],
+    "actions": [
+      "collect_forensics:success",
+      "kill:success"
+    ],
+    "outcome": "terminated (SIGTERM)",
+    "ok": true,
+    "ttd": 0.9,
+    "ttr": 4.0
+  },
+  {
+    "scenario": "ioc_hash",
+    "desc": "binary whose SHA-256 is in the MalwareBazaar-format feed",
+    "detected": true,
+    "rules": [
+      "ED-IOC-001",
+      "ED-PROC-001"
+    ],
+    "mitre": [
+      "T1036.005",
+      "T1204.002",
+      "T1588.001"
+    ],
+    "actions": [
+      "suspend:success",
+      "collect_forensics:success",
+      "quarantine:success",
+      "kill:success"
+    ],
+    "outcome": "terminated (SIGTERM)",
+    "ok": true,
+    "ttd": 0.9,
+    "ttr": 4.3
+  },
+  {
+    "scenario": "c2_beacon",
+    "desc": "beacon to Feodo-listed C2 203.0.113.66:443",
+    "detected": true,
+    "rules": [
+      "ED-IOC-002"
+    ],
+    "mitre": [
+      "T1071"
+    ],
+    "actions": [
+      "suspend:success",
+      "collect_forensics:success",
+      "quarantine:skipped",
+      "kill:success",
+      "block_ip:success"
+    ],
+    "outcome": "terminated (SIGTERM)",
+    "ok": true,
+    "ttd": 0.7,
+    "ttr": 4.0
+  },
+  {
+    "scenario": "log_tamper",
+    "desc": "history tampering inside a persistent loop script",
+    "detected": true,
+    "rules": [
+      "SIGMA:1a2b3c4d-5e6f-4071-8a9b-0c1d2e3f4a05"
+    ],
+    "mitre": [
+      "T1070.002",
+      "T1070.003"
+    ],
+    "actions": [
+      "collect_forensics:success",
+      "kill:success"
+    ],
+    "outcome": "terminated (SIGTERM)",
+    "ok": true,
+    "ttd": 0.7,
+    "ttr": 3.8
+  },
+  {
+    "scenario": "ssh_bruteforce",
+    "desc": "SSH brute force from 203.0.113.50 via syslog (logger RFC5424) + success",
+    "detected": true,
+    "rules": [
+      "ED-LOG-001",
+      "ED-LOG-002",
+      "SIGMA:0d1e2f3a-4b5c-4d6e-8f70-8192a3b4c510"
+    ],
+    "mitre": [
+      "T1021.004",
+      "T1078",
+      "T1078.003",
+      "T1110",
+      "T1110.001"
+    ],
+    "actions": [
+      "block_ip:success",
+      "block_ip:skipped"
+    ],
+    "outcome": "n/a (log event)",
+    "ok": true,
+    "ttd": 0.9,
+    "ttr": 8.7
+  },
+  {
+    "scenario": "auth_log_file",
+    "desc": "auth.log tail: sudo failures + new account",
+    "detected": true,
+    "rules": [
+      "ED-LOG-003",
+      "ED-LOG-004"
+    ],
+    "mitre": [
+      "T1136.001",
+      "T1548.003"
+    ],
+    "actions": [],
+    "outcome": "n/a (log event)",
+    "ok": true,
+    "ttd": 0.2,
+    "ttr": 5.0
+  },
+  {
+    "scenario": "blocked_ip_connect",
+    "desc": "process connecting to blocked IP 203.0.113.50",
+    "detected": true,
+    "rules": [
+      "ED-NET-003"
+    ],
+    "mitre": [
+      "T1071"
+    ],
+    "actions": [
+      "kill:success"
+    ],
+    "outcome": "terminated (SIGTERM)",
+    "ok": true,
+    "ttd": 0.3,
+    "ttr": 3.5
+  }
+]

@@ -1,0 +1,11 @@
+id: pb-fork-bomb
+name: Fork bomb / spawn storm
+description: One parent spawning children abnormally fast. Kill the parent together with all its children.
+priority: 40
+exclusive: true
+trigger:
+  rule_ids: [ED-RES-003]
+steps:
+  - {action: suspend, auto: true}
+  - {action: kill, tree: true, force: true}
+  - {action: notify, channels: [all], message: "Spawn storm stopped."}

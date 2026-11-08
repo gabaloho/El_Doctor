@@ -1,0 +1,22 @@
+title: LOLBin Used to Download or Proxy-Execute Payload
+id: 5c6d7e8f-9012-43b4-94c5-d6e7f8a9b015
+status: stable
+description: certutil/bitsadmin downloads, mshta or rundll32 executing remote/script content.
+author: El Doctor
+tags: [attack.command-and-control, attack.t1105, attack.defense-evasion, attack.t1218, attack.t1218.005, attack.t1218.011]
+logsource: {category: process_creation, product: windows}
+detection:
+  sel_certutil:
+    Image|endswith: '\certutil.exe'
+    CommandLine|contains: ['urlcache', 'verifyctl', '-decode']
+  sel_bits:
+    Image|endswith: '\bitsadmin.exe'
+    CommandLine|contains: ['/transfer', '/addfile']
+  sel_mshta:
+    Image|endswith: '\mshta.exe'
+    CommandLine|contains: ['http://', 'https://', 'javascript:', 'vbscript:']
+  sel_rundll:
+    Image|endswith: '\rundll32.exe'
+    CommandLine|contains: ['javascript:', 'http://', 'https://', '\AppData\Local\Temp\', '\Users\Public\']
+  condition: 1 of sel_*
+level: high
