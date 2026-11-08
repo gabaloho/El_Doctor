@@ -82,6 +82,8 @@ class Agent:
                  dry_run: Optional[bool] = None, headless: bool = True, users=None,
                  integrity_alerts: Optional[bool] = None) -> None:
         from eldoctor.auth.users import UserManager
+        from eldoctor import housekeeping
+        housekeeping.configure(cfg)
         self.cfg = cfg
         self.store = store
         self.user = user
@@ -108,6 +110,9 @@ class Agent:
         # who is logged in, what they run, which files they create / edit / delete / open / download
         from eldoctor.activity.monitor import ActivityMonitor
         self.activity = ActivityMonitor(cfg, store, iocs=self.engine.iocs, errors=self.dispatcher.errors)
+        # link to an El Doctor Hub (fleet console): idle until `eldoctor enroll TOKEN`
+        from eldoctor.fleet.link import HubLink
+        self.hub = HubLink(self)
         # state for the UI
         self.latest_metrics: Dict[str, Any] = {}
         self.latest_procs: List[ProcessInfo] = []
@@ -115,6 +120,7 @@ class Agent:
         self.recent_actions: Deque[Dict[str, Any]] = deque(maxlen=300)
         self.ticks = 0
         self.started = time.time()
+        self._last_housekeeping = time.time() - 3300       # first run ~5 minutes after start
         self.last_tick_ms = 0.0
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -185,7 +191,20 @@ class Agent:
             self.store.add_action(res, actor="agent:ttl")
         self.ticks += 1
         self.last_tick_ms = (time.time() - t0) * 1000
+        if time.time() - self._last_housekeeping >= 3600:
+            self._housekeeping()
         return alerts
+
+    def _housekeeping(self) -> None:
+        """Hourly: evidence retention and database upkeep (file rotation happens on every append)."""
+        from eldoctor import housekeeping
+        from eldoctor.config import subdir
+        self._last_housekeeping = time.time()
+        try:
+            housekeeping.prune_evidence(subdir("evidence"))
+            housekeeping.maintain_database(self.store)
+        except Exception as exc:
+            housekeeping.log.warning("housekeeping: %r", exc)
 
     def correlate(self, alerts: List[Alert]) -> List[Alert]:
         """Group alerts about the same entity (process instance / remote IP) into one incident.
@@ -248,7 +267,11 @@ class Agent:
                 pass
 
     def run(self, duration: Optional[float] = None) -> None:
+        from eldoctor import __version__
+        from eldoctor.housekeeping import log, setup_logging
         self._acquire_lock()
+        setup_logging(str((self.cfg.get("storage") or {}).get("log_level", "INFO")))
+        log.info("El Doctor %s agent starting: mode=%s pid=%d", __version__, self.mode, os.getpid())
         for problem in self.logs.start():
             self.store.audit("agent", "log_source_error", problem)
             self.dispatcher.errors.append(problem)
@@ -259,6 +282,7 @@ class Agent:
                           "iocs": len(self.engine.iocs)})
         self._maybe_start_intel_updates()
         self.activity.start()
+        self.hub.start()
         end = time.time() + duration if duration else None
         try:
             while not self._stop.is_set():
@@ -266,16 +290,19 @@ class Agent:
                 try:
                     self.tick()
                 except Exception as exc:
+                    log.exception("agent cycle failed")
                     self.store.audit("agent", "tick_error", repr(exc))
                 if end and time.time() >= end:
                     break
                 self._stop.wait(max(0.0, self.interval - (time.time() - start)))
         finally:
             self.logs.stop()
+            self.hub.stop()
             self.activity.stop(clean=True)     # last records, open wipe incident report, sign-off for the next boot
             self.dispatcher.close()            # flush pending notifications and stop the worker thread
             self._release_lock()
             self.store.audit(self.user.username if self.user else "agent", "agent_stopped", {"ticks": self.ticks})
+            log.info("agent stopped after %d cycles", self.ticks)
 
     def _run_safe(self) -> None:
         try:
@@ -328,4 +355,5 @@ class Agent:
                 "iocs": len(self.engine.iocs), "yara": self.engine.yara.enabled,
                 "notify_errors": list(self.dispatcher.errors)[-3:],
                 "activity": {"backend": self.activity.backend, "roots": self.activity.roots,
-                             "recorded": sum(self.activity.counts.values())}}
+                             "recorded": sum(self.activity.counts.values())},
+                "hub": dict(self.hub.state)}

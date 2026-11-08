@@ -231,8 +231,19 @@ class App:
         self.req_mode, self.dry_run = mode, dry_run
         self.api = None                                # eldoctor.api.client.ApiClient
         self.hello: Dict[str, Any] = {}
-        self.root = root or tk.Tk()
+        self.root = root or tk.Tk(className="ElDoctor")          # window class: desktop menu entries / docks
         self.root.title(f"El Doctor {__version__} - Security Console")
+        self._icons: List[Any] = []
+        try:                                                      # window / taskbar icon (never fatal)
+            from eldoctor.config import package_data
+            for name in ("eldoctor-256.png", "eldoctor-64.png"):
+                f = package_data("icons", name)
+                if f.exists():
+                    self._icons.append(tk.PhotoImage(file=str(f)))
+            if self._icons:
+                self.root.iconphoto(True, *self._icons)
+        except Exception:
+            pass
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         w, h = min(1360, sw - 40), min(860, sh - 80)
         self.root.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 3)}")
@@ -268,19 +279,52 @@ class App:
         from eldoctor.api.transport import ApiUnavailable
         if self.api is not None:
             return True
+        from eldoctor.api.client import ServiceNotRunning
         try:
             self.api = connect(self.cfg, client="gui", role="embedded")
             self.hello = self.api.call("sys.hello")
+            self._service_waits = 0
             return True
+        except ServiceNotRunning as exc:
+            # right after installation / start-up the service needs a few seconds: wait quietly, then explain
+            self.api = None
+            self._service_waits = getattr(self, "_service_waits", 0) + 1
+            if self._service_waits <= 15:
+                self.show_waiting("El Doctor is starting its protection service... (a few seconds after "
+                                  "installation or start-up)")
+                self.root.after(2000, self.open)
+            else:
+                self._service_waits = 0
+                self.show_error(str(exc))
+            return False
         except ApiUnavailable as exc:
             self.api = None
             self.show_error(str(exc))
             return False
 
+    def show_waiting(self, msg: str) -> None:
+        if self.error_view is not None:
+            self.error_view.destroy()
+        for v in (self.main, self.auth):
+            if v is not None:
+                v.destroy()
+        self.main = self.auth = None
+        f = ttk.Frame(self.root, padding=40)
+        ttk.Label(f, text="El Doctor", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(f, text=msg, wraplength=760, justify="left").pack(anchor="w", pady=12)
+        bar = ttk.Progressbar(f, mode="indeterminate", length=320)
+        bar.pack(anchor="w")
+        bar.start(12)
+        f.pack(fill="both", expand=True)
+        self.error_view = f
+
     def open(self) -> None:
         from eldoctor.api.transport import ApiUnavailable
         if not self.connect():
             return
+        if self.error_view is not None:              # a "starting..." / error screen from an earlier attempt
+            self.error_view.destroy()
+            self.error_view = None
         try:
             who = self.api.whoami()
         except ApiUnavailable as exc:              # the service went away between connect and sign-in

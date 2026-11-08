@@ -572,6 +572,7 @@ def test_deleting_el_doctors_evidence_is_an_incident(store, cfg, tmp_path):
     mon = ActivityMonitor(cfg, store)
     assert mon.tick() == []
     (home_dir() / "audit.jsonl").unlink()
+    assert mon.tick() == []                                     # confirmed on the next check (rotation-safe)
     alerts = mon.tick()
     assert [a.rule_id for a in alerts] == ["ED-ACT-003"] and alerts[0].severity == "critical"
     assert rows(store, kind="evidence_deleted")

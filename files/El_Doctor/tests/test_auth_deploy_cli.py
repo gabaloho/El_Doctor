@@ -9,7 +9,6 @@ import pytest
 import yaml
 
 from eldoctor.auth.users import AuthError, UserManager, hash_password, verify_password
-from eldoctor.cli import main
 from eldoctor.deploy.generator import TARGETS, generate
 
 PW = "Str0ng!Passw0rd"

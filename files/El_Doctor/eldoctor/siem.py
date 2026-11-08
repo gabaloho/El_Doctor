@@ -35,12 +35,13 @@ from eldoctor import __version__
 from eldoctor.config import home_dir, safe_url
 from eldoctor.integrity import GENESIS, audit_hash, fingerprint, verify_signature
 
-CRITICAL_EVENTS = {"integrity_violation", "audit_chain_broken", "data_wipe_reported"}
+CRITICAL_EVENTS = {"integrity_violation", "audit_chain_broken", "data_wipe_reported", "account_recovered"}
 HIGH_EVENTS = {"api_denied", "token_peer_mismatch", "login_failed", "approval_decided", "role_changed",
                "user_disabled", "user_enabled", "user_registered", "mode_changed", "quarantine_restore",
                "unblock_ip", "service_key_rotated", "sessions_revoked", "approval_executed", "response_action",
                "offline_changes_found", "monitoring_gap", "system_restarted", "admin_report_failed",
-               "user_privilege_use", "user_remote_login", "activity_exported"}
+               "user_privilege_use", "user_remote_login", "activity_exported", "password_reset",
+               "password_changed", "password_change_failed"}
 
 
 def event_severity(event: str) -> int:
@@ -251,6 +252,8 @@ class JsonlSink(Sink):
         p = Path(self.conf.get("path", "audit.jsonl"))
         if not p.is_absolute():
             p = home_dir() / p
+        from eldoctor.housekeeping import rotate_if_needed
+        rotate_if_needed(p)                   # rotated parts verify on their own: eldoctor audit verify-export
         try:
             with open(p, "a", encoding="utf-8") as fh:
                 for r in records:

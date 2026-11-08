@@ -578,6 +578,27 @@ def _rotate_key(svc: AgentService, p, user: User, peer: Peer):
     return {"api_key": svc.um.rotate_api_key(user)}
 
 
+@api("auth.change_password")
+def _change_password(svc: AgentService, p, user: User, peer: Peer):
+    svc.um.change_password(user, _str(p, "old", max_len=1024), _str(p, "new", max_len=1024))
+    return {"ok": True, "note": "password changed - every session was ended, log in again"}
+
+
+@api("auth.recover", auth=False)
+def _recover(svc: AgentService, p, user, peer: Peer):
+    """Forgotten admin password: reset by the OS account that runs the agent, or root / an elevated administrator,
+    without logging in (they can read the data folder anyway).  Anyone else is refused and audited."""
+    if not svc._privileged_peer(peer):
+        svc._audit_denied(peer, "auth.recover", "not_agent_os_account")
+        raise ApiFault("forbidden", f"account recovery must be run as root/Administrator or as the OS account that "
+                                    f"runs the El Doctor agent (you are {peer.user})")
+    if svc.um.count() == 0:
+        raise ApiFault("not_registered", "nobody is registered yet - register instead")
+    username = _str(p, "username", False, 64) or svc.um.first_admin() or ""
+    u = svc.um.recover(username, _str(p, "password", max_len=1024), f"{peer.user} (uid {peer.uid})")
+    return {"username": u.username, "role": u.role}
+
+
 @api("auth.check_password", auth=False)
 def _check_password(svc: AgentService, p, user, peer: Peer):
     return {"problems": password_problems(_str(p, "password", False, 1024), _str(p, "username", False, 64))}
@@ -602,6 +623,12 @@ def _users_add(svc: AgentService, p, user: User, peer: Peer):
                                _str(p, "organization", False, 128), _str(p, "use_case", False, 32) or "soc",
                                _str(p, "deployment_target", False, 32) or "linux", role=role, created_by=user)
     return {"user": new.public(), "api_key": key}
+
+
+@api("users.reset_password", "manage_users")
+def _users_reset_password(svc: AgentService, p, user: User, peer: Peer):
+    svc.um.reset_password(user, _str(p, "username", max_len=64), _str(p, "password", max_len=1024))
+    return {"ok": True}
 
 
 @api("users.set_role", "manage_users")
@@ -706,6 +733,20 @@ def _agent_start(svc: AgentService, p, user: User, peer: Peer):
     if not already:
         svc.store.audit(user.username, "detection_started", {"mode": agent.mode, "dry_run": agent.responder.dry_run})
     return {"started": not already, "mode": agent.mode, "message": note}
+
+
+@api("agent.shutdown", auth=False)
+def _agent_shutdown(svc: AgentService, p, user, peer: Peer):
+    """Clean stop for installers and upgrades (the agent records a clean shutdown).  Only the agent's own OS account
+    or root / an elevated administrator - the same people who can stop the service from the OS anyway."""
+    if not svc._privileged_peer(peer):
+        svc._audit_denied(peer, "agent.shutdown", "not_agent_os_account")
+        raise ApiFault("forbidden", "only root/Administrator or the agent's OS account can stop the agent")
+    if svc.agent is None:
+        raise ApiFault("unavailable", "no detection loop is running in this process")
+    svc.store.audit(f"os:{peer.user}", "agent_shutdown_requested", {"by_os_account": peer.user, "uid": peer.uid})
+    svc.agent._stop.set()
+    return {"stopping": True}
 
 
 @api("agent.set_mode", "run")

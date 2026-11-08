@@ -10,6 +10,12 @@ agent:
   approval_timeout: 300         # seconds a pending approval stays valid (interactive mode)
   initial_scan: true            # evaluate all already-running processes at start-up
 
+storage:                        # keeps a long-running installation bounded
+  rotate_mb: 20                 # metrics.csv, alerts.jsonl, audit.jsonl, activity.jsonl rotate at this size ...
+  rotate_keep: 5                # ... keeping name.1 ... name.N (logs/eldoctor.log: a quarter of the size)
+  evidence_retention_days: 90   # forensic evidence files older than this are deleted (0 = keep forever)
+  log_level: INFO               # <data folder>/logs/eldoctor.log: DEBUG | INFO | WARNING
+
 thresholds:
   system_cpu: 90                # % whole machine (legacy El Doctor thresholds)
   system_memory: 90
@@ -229,3 +235,8 @@ activity:                       # user-activity record for forensics & triage (s
     max_attachment_mb: 10       # zipped CSV of every affected file; larger lists are truncated (use export)
     body_rows: 100
     retry_max_seconds: 21600    # undelivered reports are retried (across restarts) with back-off up to this
+
+hub:                            # link to an El Doctor Hub (fleet console) - idle until `eldoctor enroll <TOKEN>`
+  enabled: true
+  allow_commands: [ping, forensics, suspend, resume, kill, kill_tree, quarantine, block_ip, unblock_ip, set_mode]
+  allow_remote_enforce: false   # true = the hub may switch this host to enforce mode (admins at the hub only)

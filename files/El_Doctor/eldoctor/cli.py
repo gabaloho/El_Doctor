@@ -33,10 +33,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from eldoctor import __version__
-from eldoctor.config import MODES, api_endpoint, home_dir, load_config, user_config_path, write_default_config
+from eldoctor.config import MODES, api_endpoint, home_dir, load_config, write_default_config
 
 def prog() -> str:
     """How the user started El Doctor, so hints show a command that works for them."""
+    from eldoctor._bootstrap import executable_name, is_frozen
+    if is_frozen():
+        return executable_name()
     a0 = sys.argv[0] if sys.argv else ""
     base = os.path.basename(a0.rstrip("/\\")).lower()
     py = os.path.basename(sys.executable or "python") or "python"
@@ -264,6 +267,57 @@ def cmd_whoami(args, c) -> int:
     return 0
 
 
+def _new_password(env_name: Optional[str], username: str = "") -> str:
+    """New password from an environment variable (automation) or typed twice (checked against the policy)."""
+    from eldoctor.auth.users import password_problems
+    if env_name:
+        pw = os.environ.get(env_name, "")
+        if not pw:
+            raise SystemExit(f"error: environment variable {env_name} is empty")
+        return pw
+    while True:
+        pw = getpass.getpass("New password (min 10 chars, 3 character classes): ")
+        probs = password_problems(pw, username)          # UX only - the agent enforces the policy
+        if probs:
+            print("  weak password: " + ", ".join(probs))
+            continue
+        if getpass.getpass("Repeat new password: ") != pw:
+            print("  passwords do not match")
+            continue
+        return pw
+
+
+@api_command()
+def cmd_passwd(args, c) -> int:
+    """Change your own password (every session ends)."""
+    from eldoctor.api.client import ApiError
+    me = c.call("auth.whoami")["user"]["username"]
+    old = os.environ.get(args.old_password_env, "") if args.old_password_env else getpass.getpass("Current password: ")
+    try:
+        c.call("auth.change_password", old=old, new=_new_password(args.password_env, me))
+    except ApiError as exc:
+        print(f"Password not changed: {exc.message}", file=sys.stderr)
+        return 1
+    print(f"Password changed; every session was ended. Log in again:  {prog()} login --username {me}")
+    return 0
+
+
+@api_command()
+def cmd_recover(args, c) -> int:
+    """Forgotten admin password: reset it locally (root / the agent's OS account only, no login needed)."""
+    from eldoctor.api.client import ApiError
+    print("Account recovery: resets the password, unlocks and re-enables the account, ends its sessions.\n"
+          "Allowed only for root/Administrator or the OS account that runs the El Doctor agent; recorded in the "
+          "audit trail as a critical event.")
+    pw = _new_password(args.password_env, args.username or "")
+    try:
+        res = c.call("auth.recover", username=args.username or "", password=pw)
+    except ApiError as exc:
+        return _fail(exc)
+    print(f"Recovered '{res['username']}' (role {res['role']}). Log in:  {prog()} login --username {res['username']}")
+    return 0
+
+
 @api_command()
 def cmd_users(args, c) -> int:
     if args.users_cmd == "list":
@@ -282,6 +336,9 @@ def cmd_users(args, c) -> int:
     elif args.users_cmd == "set-role":
         c.call("users.set_role", username=args.username, role=args.role)
         print(f"{args.username} -> {args.role} (their existing sessions were revoked)")
+    elif args.users_cmd == "reset-password":
+        c.call("users.reset_password", username=args.username, password=_new_password(args.password_env, args.username))
+        print(f"{args.username}: password reset, account unlocked, sessions ended")
     elif args.users_cmd in ("disable", "enable"):
         c.call("users.set_active", username=args.username, active=args.users_cmd == "enable")
         print(f"{args.username} {args.users_cmd}d")
@@ -445,8 +502,8 @@ def cmd_tui(args) -> int:
 
 def cmd_gui(args) -> int:
     """Desktop GUI. Registration/login happen inside the window."""
-    from eldoctor._bootstrap import tk_missing, tk_problem
-    if tk_missing() and not args.no_auto_runtime:
+    from eldoctor._bootstrap import is_frozen, tk_missing, tk_problem
+    if tk_missing() and not args.no_auto_runtime and not is_frozen():
         # no tkinter in this Python (e.g. system Python without python3-tk and no sudo):
         # run the GUI with a Tk-capable Python found on this machine instead
         from eldoctor.ui.runtime import relaunch_gui
@@ -800,6 +857,114 @@ def _audit_api(args, c) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- whole-computer protection (service)
+def _installer_log(path: Optional[str]):
+    lines: List[str] = []
+
+    def log(msg: str) -> None:
+        lines.append(msg)
+        print(msg, flush=True)
+        if path:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+    return log
+
+
+def cmd_install_service(args) -> int:
+    """Protect the whole computer: background service at boot (Windows: Scheduled Task as SYSTEM; Linux: systemd).
+    Used by the Windows setup wizard and the Linux packages; also usable on its own (as administrator / root)."""
+    from eldoctor.installer import InstallError, install_service
+    log = _installer_log(args.log)
+    e = os.environ
+    admin = {"username": args.admin_username or e.get("ELDOCTOR_ADMIN_USER", ""),
+             "email": args.admin_email or e.get("ELDOCTOR_ADMIN_EMAIL", ""),
+             "full_name": args.admin_name or e.get("ELDOCTOR_ADMIN_NAME", ""),
+             "organization": e.get("ELDOCTOR_ADMIN_ORG", ""),
+             "password": (e.get(args.password_env, "") if args.password_env else "") or e.get("ELDOCTOR_ADMIN_PASSWORD", "")}
+    try:
+        res = install_service(admin, mode=args.mode, start=not args.no_start, log=log)
+    except InstallError as exc:
+        if "administrator account" in str(exc) and sys.stdin.isatty() and not args.quiet:
+            print("El Doctor needs an administrator: the person who manages it on this computer.")
+            admin["username"] = admin["username"] or _ask("User name", getpass.getuser().lower())
+            admin["full_name"] = admin["full_name"] or _ask("Full name", "")
+            admin["email"] = admin["email"] or _ask("E-mail (data-wipe reports go here)")
+            admin["password"] = admin["password"] or _new_password(None, admin["username"])
+            try:
+                res = install_service(admin, mode=args.mode, start=not args.no_start, log=log)
+            except InstallError as exc2:
+                log(f"error: {exc2}")
+                return 1
+        else:
+            log(f"error: {exc}")
+            return 1
+    except Exception as exc:                      # the wizard shows the log: never end without a reason
+        log(f"error: {type(exc).__name__}: {exc}")
+        return 1
+    log(("Upgraded" if res.get("upgraded") else "Installed") + f" the El Doctor service (data: {res['data_dir']}).")
+    if not args.quiet:
+        print(f"Every user can now open El Doctor (\"{prog()} gui\" or the El Doctor shortcut) and log in.")
+    return 0
+
+
+def cmd_uninstall_service(args) -> int:
+    from eldoctor.installer import InstallError, stop_service, uninstall_service
+    log = _installer_log(args.log)
+    if args.stop_only:
+        res = stop_service(log=log)
+        log("El Doctor service stopped" if res.get("stopped") else res.get("note", "nothing to stop"))
+        return 0
+    try:
+        res = uninstall_service(purge=args.purge, log=log)
+    except InstallError as exc:
+        log(f"error: {exc}")
+        return 1
+    if not res.get("removed"):
+        log(res.get("note", "nothing to remove"))
+        return 0
+    log("El Doctor service removed" + (" with all its records." if res.get("purged") else
+                                      f"; records kept in {res.get('data_dir')}."))
+    return 0
+
+
+# --------------------------------------------------------------------------- El Doctor Hub (agent side)
+def cmd_enroll(args) -> int:
+    """Join an El Doctor Hub (fleet console) with the token the hub administrator gave you."""
+    from eldoctor.fleet.link import LinkError, enroll
+    from eldoctor.fleet.pki import PkiError
+    try:
+        info = enroll(args.token)
+    except (LinkError, PkiError) as exc:
+        print(f"Enrollment failed: {exc}", file=sys.stderr)
+        return 1
+    except PermissionError as exc:
+        print(f"Enrollment failed: cannot write to the El Doctor data folder ({exc}). Run as administrator / root "
+              f"(the account of the El Doctor service).", file=sys.stderr)
+        return 1
+    print(f"Enrolled as '{info['agent_id']}' with the hub {info['url']}.\n"
+          f"The running agent connects within a minute (no restart needed); check with: {prog()} doctor")
+    return 0
+
+
+def cmd_unenroll(args) -> int:
+    from eldoctor.fleet.link import unenroll
+    print("Left the hub (its certificate was deleted here; revoke it at the hub too)." if unenroll()
+          else "This computer is not enrolled with a hub.")
+    return 0
+
+
+# --------------------------------------------------------------------------- self-check
+def cmd_doctor(args) -> int:
+    """Is this installation ready? Read-only, no login needed."""
+    from eldoctor import doctor
+    checks = doctor.run_checks(getattr(args, "config", None), network=args.network)
+    if args.json:
+        print(json.dumps(doctor.as_json(checks), indent=2))
+    else:
+        print(doctor.render(checks, color=sys.stdout.isatty() and os.name != "nt"))
+    return doctor.exit_code(checks)
+
+
 # --------------------------------------------------------------------------- user activity (forensics)
 def parse_when(v: Optional[str]) -> float:
     """'2h', '30m', '3d', '45s', epoch seconds, or a local date/time ('2025-01-31', '2025-01-31 14:00')."""
@@ -925,8 +1090,20 @@ def cmd_activity(args, c) -> int:
 
 
 def cmd_default(args) -> int:
-    """`eldoctor` with no command: register if needed, log in, open the console."""
+    """`eldoctor` with no command: register if needed, log in, open the console.
+
+    Started without a terminal (double-clicked in a file manager, a desktop launcher): the desktop GUI
+    instead, which has its own registration and sign-in screens."""
     from eldoctor.api.client import ApiError
+    if not (sys.stdin and sys.stdin.isatty()):
+        from eldoctor._bootstrap import tk_problem
+        problem = tk_problem()
+        if not problem:
+            return cmd_gui(argparse.Namespace(config=args.config, api_key=args.api_key, mode=None, dry_run=False,
+                                              interval=None, theme=None, no_auto_runtime=False, _argv=["gui"]))
+        print(f"El Doctor needs a terminal (run `{prog()}` in one) or a desktop: {problem}\n"
+              f"Run `{prog()} doctor` to check this installation, `{prog()} -h` for every command.", file=sys.stderr)
+        return 2
     c = _client(args)
     try:
         registered = c.call("sys.hello")["registered"]
@@ -956,7 +1133,8 @@ def build_parser() -> argparse.ArgumentParser:
     from eldoctor.auth.users import DEPLOY_TARGETS, ROLES, USE_CASES
     p = argparse.ArgumentParser(prog="eldoctor", description="El Doctor - monitoring, detection & automated response")
     p.add_argument("--version", action="version", version=f"El Doctor {__version__}")
-    p.add_argument("--config", help=f"config file (default {user_config_path()})")
+    from eldoctor.config import home_path
+    p.add_argument("--config", help=f"config file (default {home_path() / 'config.yaml'})")
     p.add_argument("--api-key", help="API key instead of an interactive session (or env ELDOCTOR_API_KEY)")
     sub = p.add_subparsers(dest="cmd")
 
@@ -973,6 +1151,36 @@ def build_parser() -> argparse.ArgumentParser:
     lg.set_defaults(func=cmd_login)
     sub.add_parser("logout", help="end this session (the token is revoked by the agent)").set_defaults(func=cmd_logout)
     sub.add_parser("whoami").set_defaults(func=cmd_whoami)
+    pw = sub.add_parser("passwd", help="change your password")
+    pw.add_argument("--old-password-env"); pw.add_argument("--password-env", help="new password from this variable")
+    pw.set_defaults(func=cmd_passwd)
+    rc = sub.add_parser("recover-admin", help="forgotten admin password: reset it locally (root / service account)")
+    rc.add_argument("--username", help="account to recover (default: the first admin)")
+    rc.add_argument("--password-env", help="new password from this variable")
+    rc.set_defaults(func=cmd_recover)
+    isv = sub.add_parser("install-service", help="protect the whole computer: background service at boot "
+                                                 "(administrator / root)")
+    isv.add_argument("--admin-username"); isv.add_argument("--admin-email"); isv.add_argument("--admin-name")
+    isv.add_argument("--password-env", help="administrator password from this variable (default ELDOCTOR_ADMIN_PASSWORD)")
+    isv.add_argument("--mode", choices=MODES, default="interactive")
+    isv.add_argument("--no-start", action="store_true"); isv.add_argument("--quiet", action="store_true")
+    isv.add_argument("--log", help="also append the steps to this file (used by the installers)")
+    isv.set_defaults(func=cmd_install_service)
+    usv = sub.add_parser("uninstall-service", help="remove the background service (records are kept unless --purge)")
+    usv.add_argument("--purge", action="store_true", help="also delete every El Doctor record on this computer")
+    usv.add_argument("--stop-only", action="store_true", help="only stop the running service (before an upgrade)")
+    usv.add_argument("--quiet", action="store_true"); usv.add_argument("--log")
+    usv.set_defaults(func=cmd_uninstall_service)
+    en = sub.add_parser("enroll", help="join an El Doctor Hub (fleet console) with an enrollment token")
+    en.add_argument("token")
+    en.set_defaults(func=cmd_enroll)
+    sub.add_parser("unenroll", help="leave the El Doctor Hub").set_defaults(func=cmd_unenroll)
+    from eldoctor.fleet.cli import add_parser as add_hub_parser
+    add_hub_parser(sub)
+    dr = sub.add_parser("doctor", help="check this installation and say how to fix problems (no login needed)")
+    dr.add_argument("--json", action="store_true")
+    dr.add_argument("--network", action="store_true", help="also try to reach the configured SMTP server")
+    dr.set_defaults(func=cmd_doctor)
 
     u = sub.add_parser("users", help="user management (admin)")
     usub = u.add_subparsers(dest="users_cmd", required=True)
@@ -983,6 +1191,8 @@ def build_parser() -> argparse.ArgumentParser:
     ua.add_argument("--use-case", choices=list(USE_CASES), default="soc")
     ua.add_argument("--deploy-target", choices=list(DEPLOY_TARGETS), default="linux")
     us = usub.add_parser("set-role"); us.add_argument("username"); us.add_argument("role", choices=ROLES)
+    urp = usub.add_parser("reset-password", help="set a new password for another user (admin)")
+    urp.add_argument("username"); urp.add_argument("--password-env", help="read the new password from this variable")
     usub.add_parser("disable").add_argument("username")
     usub.add_parser("enable").add_argument("username")
     u.set_defaults(func=cmd_users)

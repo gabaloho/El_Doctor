@@ -181,7 +181,7 @@ class ActivityMonitor:
         self.shred_sizes: Dict[str, Optional[int]] = {}
         self.self_reads: Dict[str, float] = {}
         self.xbel_seen: Dict[str, set] = {}
-        self.evidence_present: Dict[str, bool] = {}
+        self.evidence_present: Dict[str, Any] = {}
         self.incident_alert: Optional[Alert] = None
         self.kernel_files = False            # auditd / Sysmon file telemetry seen -> hold inotify events to merge
         self.started = False
@@ -399,6 +399,8 @@ class ActivityMonitor:
         name = self.ac.get("jsonl")
         if not name or not rows:
             return
+        from eldoctor.housekeeping import rotate_if_needed
+        rotate_if_needed(home_dir() / str(name))
         try:
             with open(home_dir() / str(name), "a", encoding="utf-8") as fh:
                 for r in rows:
@@ -1095,17 +1097,37 @@ class ActivityMonitor:
     def _evidence_check(self, now: float) -> List[Alert]:
         out: List[Alert] = []
         base = home_dir()
+        from eldoctor.housekeeping import recently_rotated
         for name in EVIDENCE_NAMES:
-            exists = (base / name).exists()
-            was = self.evidence_present.get(name)
-            self.evidence_present[name] = exists
-            if was and not exists:
+            # An incident when an item is missing on two checks in a row (rotation re-creates a file within
+            # microseconds - it never stays missing), or when a file is replaced / truncated in place (new inode,
+            # smaller size) without a rotation to explain it.
+            try:
+                st = os.stat(base / name)
+                cur: Optional[Tuple[int, int]] = (st.st_ino, 0 if _st.S_ISDIR(st.st_mode) else st.st_size)
+            except OSError:
+                cur = None
+            state = self.evidence_present.get(name)          # {"seen": (ino, size) | None, "missing": bool}
+            self.evidence_present[name] = {"seen": cur, "missing": False}
+            how = ""
+            if state is None:
+                continue                                      # first check: just remember
+            seen = state["seen"]
+            if cur is None and state["missing"]:
+                how = "deleted or moved"                      # still missing: not a rotation
+            elif cur is None and seen is not None:
+                self.evidence_present[name] = {"seen": seen, "missing": True}    # confirm on the next check
+            elif cur is not None and seen is not None and not state["missing"] and \
+                    (cur[0] != seen[0] or cur[1] < seen[1]) and not recently_rotated(base / name):
+                how = "replaced" if cur[0] != seen[0] else "truncated"
+            if how:
                 path = str(base / name)
                 who = self.attr.attribute(path, "deleted", now)
                 row = self._row("evidence_deleted", "incident", now, user=who.get("user") or "", pid=who.get("pid"),
                                 process=who.get("process") or "", exe=who.get("exe") or "", path=path,
                                 source="agent", attribution=who.get("attribution", "unknown"),
-                                details={"evidence": who.get("evidence", ""), "cmdline": who.get("cmdline", "")})
+                                details={"evidence": who.get("evidence", ""), "cmdline": who.get("cmdline", ""),
+                                         "how": how})
                 self._write([row], now)
                 proc = live_process(int(who["pid"]), float(who.get("create_time") or 0)) if who.get("pid") else None
                 a = self._alert("ED-ACT-003", process=proc, dedup=f"ED-ACT-003|{name}|{int(now)}",
@@ -1114,8 +1136,8 @@ class ActivityMonitor:
                 if a:
                     out.append(a)
                     rep = self.reporter.simple_report(
-                        f"El Doctor evidence deleted: {name}",
-                        [f"{path} was deleted or moved on this host at {time.ctime(now)}.",
+                        f"El Doctor evidence {how}: {name}",
+                        [f"{path} was {how} on this host at {time.ctime(now)}.",
                          f"By: {who.get('user') or 'unknown'} ({who.get('attribution')}: {who.get('evidence')})",
                          f"Process: {who.get('process') or '?'} pid {who.get('pid') or '?'} {who.get('cmdline') or ''}",
                          "The agent keeps recording into its open database while it runs; check the SIEM copy of "
